@@ -17,14 +17,14 @@ async function telegram(method, payload) {
 		throw new Error(`Telegram API error in ${method}: ${JSON.stringify(body)}`)
 	}
 
-	return body
+	return body.result
 }
 
 export async function onRequest(req, ctx) {
 	const text = req.getParam('text')
 	if (!text) throw new Error('Missing text')
 
-	await telegram('sendMessage', {
+	const message = await telegram('sendMessage', {
 		chat_id: defaultChatId,
 		text,
 		reply_markup: {
@@ -32,37 +32,68 @@ export async function onRequest(req, ctx) {
 				[
 					{ text: 'Ok', callback_data: 'ok' },
 					{ text: 'Cancel', callback_data: 'cancel' },
+					{ text: 'Reply', callback_data: 'reply' },
 				],
 			],
 		},
 	})
 
-	ctx.setResult({ ok: true, sent: text })
+	ctx.setResult({
+		request: text,
+        message: message,
+	})
 }
 
 export async function onWebhook(req, ctx) {
 	const body = req.getParam('body')
 	const update = JSON.parse(body)
 
-	const text = update.message?.text
-	const action = update.callback_query?.data
-
-	if (action) {
-		const messageId = update.callback_query.message.message_id
+	// Нажатие на inline-кнопку
+	if (update.callback_query) {
+		const callbackId = update.callback_query.id
+		const action = update.callback_query.data
 		const chatId = update.callback_query.message.chat.id
-		const callbackQueryId = update.callback_query.id
+		const questionMessage = update.callback_query.message
 
 		await telegram('answerCallbackQuery', {
-			callback_query_id: callbackQueryId,
+			callback_query_id: callbackId,
 		})
 
-		await telegram('deleteMessage', {
-			chat_id: chatId,
-			message_id: messageId,
-		})
+		if (action === 'reply') {
+			const replyMessage = await telegram('sendMessage', {
+				chat_id: chatId,
+				text: 'Your comment:',
+				reply_markup: {
+					force_reply: true,
+				},
+				reply_to_message_id: questionMessage.message_id,
+			})
 
-		ctx.setResult({ answer: action, body: update })
-	} else {
-		ctx.setResult({ answer: text, body: update })
+			ctx.setResult({
+				action: 'reply',
+    			body: update,
+			})
+		} else {
+            ctx.setResult({
+                action: action,
+    			body: update,
+            })
+        }
+	} 
+	// Текстовый ответ пользователя
+    else if (update.message?.text) {
+		const text = update.message.text
+		const replyToMessage = update.message.reply_to_message
+
+		ctx.setResult({
+			reply: text,
+			body: update,
+		})
 	}
+    else {
+        ctx.setResult({ 
+            action: 'unknown',
+            body: update,
+        })
+    }
 }
