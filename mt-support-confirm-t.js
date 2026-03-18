@@ -20,6 +20,10 @@ async function telegram(method, payload) {
 	return body.result
 }
 
+const confirmButtons = { text: 'Confirm', callback_data: 'confirm' }
+const rejectButtons = { text: 'Reject', callback_data: 'reject' }
+const replyButtons = { text: 'Reply', callback_data: 'reply' }
+
 export async function onRequest(req, ctx) {
 	const text = req.getParam('text')
 	if (!text) throw new Error('Missing text')
@@ -28,14 +32,8 @@ export async function onRequest(req, ctx) {
 		chat_id: defaultChatId,
 		text,
 		reply_markup: {
-			inline_keyboard: [
-				[
-					{ text: 'Ok', callback_data: 'ok' },
-					{ text: 'Cancel', callback_data: 'cancel' },
-					{ text: 'Reply', callback_data: 'reply' },
-				],
-			],
-		},
+            inline_keyboard: [[ confirmButtons, rejectButtons, replyButtons ]],
+        }
 	})
 
 	ctx.setResult({
@@ -52,48 +50,52 @@ export async function onWebhook(req, ctx) {
 	if (update.callback_query) {
 		const callbackId = update.callback_query.id
 		const action = update.callback_query.data
-		const chatId = update.callback_query.message.chat.id
 		const questionMessage = update.callback_query.message
+		const chatId = questionMessage.chat.id
+		const messageId = questionMessage.message_id
 
 		await telegram('answerCallbackQuery', {
 			callback_query_id: callbackId,
 		})
 
-		if (action === 'reply') {
-			const replyMessage = await telegram('sendMessage', {
+		// Удаляем кнопки у исходного сообщения
+		await telegram('editMessageReplyMarkup', {
+			chat_id: chatId,
+			message_id: messageId,
+			reply_markup: {
+				inline_keyboard: [],
+			},
+		})
+
+		if (action === confirmButtons.callback_data || action === rejectButtons.callback_data) {
+			await telegram('sendMessage', {
 				chat_id: chatId,
-				text: 'Your comment:',
+				text: `Your answer: ${action}`,
+			})
+		}
+		else if (action === replyButtons.callback_data) {
+			await telegram('sendMessage', {
+				chat_id: chatId,
+				text: 'Your reply:',
 				reply_markup: {
 					force_reply: true,
 				},
-				reply_to_message_id: questionMessage.message_id,
+				reply_to_message_id: messageId,
 			})
+		}
 
-			ctx.setResult({
-				action: 'reply',
-    			body: update,
-			})
-		} else {
-            ctx.setResult({
-                action: action,
-    			body: update,
-            })
-        }
-	} 
+        ctx.setResult({
+            action: action,
+            body: update,
+        })
+	}
 	// Текстовый ответ пользователя
-    else if (update.message?.text) {
+	else if (update.message?.text) {
 		const text = update.message.text
-		const replyToMessage = update.message.reply_to_message
 
 		ctx.setResult({
-			reply: text,
+            reply: text,
 			body: update,
 		})
 	}
-    else {
-        ctx.setResult({ 
-            action: 'unknown',
-            body: update,
-        })
-    }
 }
