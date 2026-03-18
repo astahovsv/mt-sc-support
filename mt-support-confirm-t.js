@@ -1,8 +1,7 @@
 const token = process.env.TELEGRAM_BOT_TOKEN
-const defaultChatId = process.env.TELEGRAM_CHAT_ID
-
 if (!token) throw new Error('Missing TELEGRAM_BOT_TOKEN')
-if (!defaultChatId) throw new Error('Missing TELEGRAM_CHAT_ID')
+
+const supportedChatIds = process.env.TELEGRAM_CHAT_IDS?.split(',').map(id => id.trim())
 
 async function telegram(method, payload) {
 	const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
@@ -28,17 +27,17 @@ export async function onRequest(req, ctx) {
 	const text = req.getParam('text')
 	if (!text) throw new Error('Missing text')
 
-	const message = await telegram('sendMessage', {
-		chat_id: defaultChatId,
-		text,
-		reply_markup: {
-            inline_keyboard: [[ confirmButtons, rejectButtons, replyButtons ]],
-        }
-	})
+    const reply_markup = {
+        inline_keyboard: [[ confirmButtons, rejectButtons, replyButtons ]],
+    }
+    for (const chatId of supportedChatIds) {
+        await telegram('sendMessage', {
+            chat_id: chatId, text: text, reply_markup
+        })
+    }
 
 	ctx.setResult({
-		request: text,
-        message: message,
+		request: text
 	})
 }
 
@@ -46,13 +45,16 @@ export async function onWebhook(req, ctx) {
 	const body = req.getParam('body')
 	const update = JSON.parse(body)
 
+    const chatId = update.message?.chat?.id || update.callback_query?.message?.chat?.id
+    if (!supportedChatIds.includes(String(chatId))) {
+        throw new Error(`Received update from unsupported chat ID ${chatId}.`)
+    }
+
 	// Нажатие на inline-кнопку
 	if (update.callback_query) {
 		const callbackId = update.callback_query.id
 		const action = update.callback_query.data
-		const questionMessage = update.callback_query.message
-		const chatId = questionMessage.chat.id
-		const messageId = questionMessage.message_id
+		const messageId = update.callback_query.message.message_id
 
 		await telegram('answerCallbackQuery', {
 			callback_query_id: callbackId,
