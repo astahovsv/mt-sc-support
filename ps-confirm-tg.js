@@ -138,13 +138,13 @@ async function sendDocument(chatId, doc) {
     })
 
     let text = 
-    `
-    ${doc[COL_PREFIX]}-${doc[COL_NUMBER]} from ${docDate}
-    Title: ${doc[COL_TITLE]}
-    Source: ${doc[COL_SOURCE]}
-    Description: ${doc[COL_DESCRIPTION]}
-    Action: ${doc[COL_ACTION]}
-    `
+`
+${doc[COL_PREFIX]}-${doc[COL_NUMBER]} from ${docDate}
+Title: ${doc[COL_TITLE]}
+Source: ${doc[COL_SOURCE]}
+Description: ${doc[COL_DESCRIPTION]}
+Action: ${doc[COL_ACTION]}
+`
 
     const res = await telegram('sendMessage', {
         chat_id: chatId, text: text, reply_markup: {

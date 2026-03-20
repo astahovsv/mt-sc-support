@@ -1,5 +1,19 @@
 import mysql from 'mysql2/promise'
 
+const TABLE_DOCS = 'gc8e'
+const TABLE_COUNTER = 'k8cf'
+
+const COL_PERIOD = 'h7pk'
+const COL_CONTEXT = 'q4lz'
+const COL_DATE = 'mts3'
+const COL_PREFIX = 'z6om'
+const COL_NUMBER = 'cg2y'
+const COL_TYPE = 'c6rq'
+const COL_TITLE = 'tob7'
+const COL_SOURCE = 'aid4'
+const COL_DESCRIPTION = 'e7kx'
+const COL_ACTION = 'b8om'
+
 const dbConfig = {
     host: process.env.DB_HOST ?? 'localhost',
     port: process.env.DB_PORT ?? 3306,
@@ -38,28 +52,28 @@ async function createDocument(contextId, title, source, description, action) {
 
         // Блокируем строку счетчика, если она уже есть
         const [rows] = await db.execute(
-            `SELECT cg2y FROM k8cf WHERE z6om = ? AND h7pk = ? FOR UPDATE`,
+            `SELECT ${COL_NUMBER} FROM ${TABLE_COUNTER} WHERE ${COL_PREFIX} = ? AND ${COL_PERIOD} = ? FOR UPDATE`,
             [DOC_PREFIX, period]
         )
 
         if (rows.length === 0) {
             documentNumber = 1
             await db.execute(
-                `INSERT INTO k8cf (z6om, h7pk, cg2y) VALUES (?, ?, ?)`,
+                `INSERT INTO ${TABLE_COUNTER} (${COL_PREFIX}, ${COL_PERIOD}, ${COL_NUMBER}) VALUES (?, ?, ?)`,
                 [DOC_PREFIX, period, documentNumber]
             )
         } else {
-            documentNumber = Number(rows[0].cg2y) + 1
+            documentNumber = Number(rows[0][COL_NUMBER]) + 1
             await db.execute(
-                `UPDATE k8cf SET cg2y = ? WHERE z6om = ? AND h7pk = ?`,
+                `UPDATE ${TABLE_COUNTER} SET ${COL_NUMBER} = ? WHERE ${COL_PREFIX} = ? AND ${COL_PERIOD} = ?`,
                 [documentNumber, DOC_PREFIX, period]
             )
         }
 
         await db.execute(
             `
-            INSERT INTO gc8e (q4lz, mts3, z6om, cg2y, c6rq, tob7, aid4, e7kx, b8om)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO ${TABLE_DOCS} (${COL_CONTEXT}, ${COL_DATE}, ${COL_PREFIX}, ${COL_NUMBER}, ${COL_TYPE}, ${COL_TITLE}, ${COL_SOURCE}, ${COL_DESCRIPTION}, ${COL_ACTION})
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             `,
             [
                 contextId, documentDate, DOC_PREFIX, documentNumber,
