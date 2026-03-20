@@ -21,14 +21,10 @@ function getCurrentDateOnly() {
     return new Date().toISOString().slice(0, 10) // YYYY-MM-DD
 }
 
-export async function onRequest(req, ctx) {
+// --- operations ---
 
-    const title = req.getParam('tob7') ?? ''
-    const source = req.getParam('aid4') ?? ''
-    const description = req.getParam('e7kx') ?? ''
-    const action = req.getParam('b8om') ?? ''
+async function createDocument(contextId, title, source, description, action) {
 
-    const contextId = ctx.getContextID() // бинарное значение
     const period = getCurrentPeriod()
     const documentDate = getCurrentDateOnly()
     let documentNumber
@@ -80,12 +76,27 @@ export async function onRequest(req, ctx) {
         await db.end()
     }
 
+    return `${DOC_PREFIX}-${period}-${documentNumber}`
+}
+
+// --- onRequest ---
+
+export async function onRequest(req, ctx) {
+
+    const contextId = ctx.getContextID()
+    const title = req.getParam('tob7') ?? ''
+    const source = req.getParam('aid4') ?? ''
+    const description = req.getParam('e7kx') ?? ''
+    const action = req.getParam('b8om') ?? ''
+
+    const docId = await createDocument(contextId, title, source, description, action)
+
     ctx.pushRequest('com.persapps.confirm.tg', '1.0.*', {
         's1ra': 'v5hx',
     })
 
     ctx.close({
         ok: true,
-        documentId: `${DOC_PREFIX}-${period}-${documentNumber}`,
+        docId: docId,
     })
 }

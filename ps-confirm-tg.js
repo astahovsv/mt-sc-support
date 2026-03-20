@@ -1,3 +1,13 @@
+import mysql from 'mysql2/promise'
+
+const dbConfig = {
+    host: process.env.DB_HOST ?? 'localhost',
+    port: process.env.DB_PORT ?? 3306,
+    user: process.env.DB_USERNAME,
+    password: process.env.DB_PASSWORD,
+    database: process.env.DB_NAME
+}
+
 const token = process.env.TELEGRAM_BOT_TOKEN
 if (!token) throw new Error('Missing TELEGRAM_BOT_TOKEN')
 
