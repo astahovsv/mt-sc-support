@@ -23,23 +23,72 @@ const confirmButtons = { text: 'Confirm', callback_data: 'confirm' }
 const rejectButtons = { text: 'Reject', callback_data: 'reject' }
 const replyButtons = { text: 'Reply', callback_data: 'reply' }
 
-export async function onRequest(req, ctx) {
-	const text = req.getParam('text')
-	if (!text) throw new Error('Missing text')
+// --- operations ---
 
-    const reply_markup = {
-        inline_keyboard: [[ confirmButtons, rejectButtons, replyButtons ]],
-    }
+async function sendNotification(text) {
     for (const chatId of supportedChatIds) {
         await telegram('sendMessage', {
-            chat_id: chatId, text: text, reply_markup
+            chat_id: chatId, text: text
         })
     }
-
-	ctx.setResult({
-		request: text
-	})
 }
+
+async function sendDocument(chatId, text) {
+    await telegram('sendMessage', {
+        chat_id: chatId, text: text, reply_markup: {
+            inline_keyboard: [[ confirmButtons, rejectButtons, replyButtons ]],
+        }
+    })
+}
+
+async function handleDocumentAction(chatId, messageId, action) {
+
+    // Удаляем кнопки у исходного сообщения
+    await telegram('editMessageReplyMarkup', {
+        chat_id: chatId,
+        message_id: messageId,
+        reply_markup: {
+            inline_keyboard: [],
+        },
+    })
+
+    if (action === confirmButtons.callback_data || action === rejectButtons.callback_data) {
+        await telegram('sendMessage', {
+            chat_id: chatId,
+            text: `Your answer: ${action}`,
+        })
+    }
+    else if (action === replyButtons.callback_data) {
+        await telegram('sendMessage', {
+            chat_id: chatId,
+            text: 'Your reply:',
+            reply_markup: {
+                force_reply: true,
+            },
+            reply_to_message_id: messageId,
+        })
+    }
+}
+
+// --- onRequest ---
+
+export async function onRequest(req, ctx) {
+	const msgType = req.getParam('s1ra')
+	if (!msgType) throw new Error('Missing s1ra parameter')
+
+    switch (msgType) {
+        case 'v5hx': {
+            await sendNotification('New document created.')
+            break
+        }
+        default:
+            throw new Error(`Unsupported s1ra value: ${msgType}`)
+    }
+
+	ctx.close({ result: 'Ok' })
+}
+
+// --- onWebhook ---
 
 export async function onWebhook(req, ctx) {
 	const body = req.getParam('body')
@@ -60,33 +109,9 @@ export async function onWebhook(req, ctx) {
 			callback_query_id: callbackId,
 		})
 
-		// Удаляем кнопки у исходного сообщения
-		await telegram('editMessageReplyMarkup', {
-			chat_id: chatId,
-			message_id: messageId,
-			reply_markup: {
-				inline_keyboard: [],
-			},
-		})
+        await handleDocumentAction(chatId, messageId, action)
 
-		if (action === confirmButtons.callback_data || action === rejectButtons.callback_data) {
-			await telegram('sendMessage', {
-				chat_id: chatId,
-				text: `Your answer: ${action}`,
-			})
-		}
-		else if (action === replyButtons.callback_data) {
-			await telegram('sendMessage', {
-				chat_id: chatId,
-				text: 'Your reply:',
-				reply_markup: {
-					force_reply: true,
-				},
-				reply_to_message_id: messageId,
-			})
-		}
-
-        ctx.setResult({
+        ctx.close({
             action: action,
             body: update,
         })
@@ -95,7 +120,12 @@ export async function onWebhook(req, ctx) {
 	else if (update.message?.text) {
 		const text = update.message.text
 
-		ctx.setResult({
+        // Пользователь нажал на команду /support
+        if (text === '/support') {
+            await sendDocument(chatId, 'Please confirm or reject the document.')
+        }
+
+		ctx.close({
             reply: text,
 			body: update,
 		})
