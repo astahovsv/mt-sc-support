@@ -1,5 +1,19 @@
 import mysql from 'mysql2/promise'
 
+const TABLE_DOCS = 'gc8e'
+
+const COL_CONTEXT = 'q4lz'
+const COL_DATE = 'mts3'
+const COL_PREFIX = 'z6om'
+const COL_NUMBER = 'cg2y'
+const COL_TYPE = 'c6rq'
+const COL_TITLE = 'tob7'
+const COL_SOURCE = 'aid4'
+const COL_DESCRIPTION = 'e7kx'
+const COL_ACTION = 'b8om'
+const COL_PROCESSED = 'up8s'
+const COL_TG_MESSAGE_ID = 'a6ng'
+
 const dbConfig = {
     host: process.env.DB_HOST ?? 'localhost',
     port: process.env.DB_PORT ?? 3306,
@@ -43,12 +57,102 @@ async function sendNotification(text) {
     }
 }
 
-async function sendDocument(chatId, text) {
-    await telegram('sendMessage', {
+async function getAnyDocument(docType) {
+    const db = await mysql.createConnection(dbConfig)
+
+    let doc = null
+
+    try {
+        await db.beginTransaction()
+
+        const [rows] = await db.execute(
+            `SELECT * FROM ${TABLE_DOCS} WHERE ${COL_TYPE} = ? AND ${COL_PROCESSED} = 0 LIMIT 1`, [docType]
+        )
+        doc = (rows.length > 0) ? rows[0] : null
+
+        await db.commit()
+    } catch (error) {
+        try {
+            await db.rollback()
+        } catch (_) {}
+        throw error
+    } finally {
+        await db.end()
+    }
+
+    return doc
+}
+
+async function getDocumentByMessageId(tgMessageId) {
+    const db = await mysql.createConnection(dbConfig)
+
+    let doc = null
+
+    try {
+        await db.beginTransaction()
+
+        const [rows] = await db.execute(
+            `SELECT * FROM ${TABLE_DOCS} WHERE ${COL_TG_MESSAGE_ID} = ?`, [tgMessageId]
+        )
+        doc = (rows.length > 0) ? rows[0] : null
+
+        await db.commit()
+    } catch (error) {
+        try {
+            await db.rollback()
+        } catch (_) {}
+        throw error
+    } finally {
+        await db.end()
+    }
+
+    return doc
+}
+
+async function setDocumentProcessed(docId, processed, tgMessageId) {
+    const db = await mysql.createConnection(dbConfig)
+
+    try {
+        await db.beginTransaction()
+
+        await db.execute(
+            `UPDATE ${TABLE_DOCS} SET ${COL_PROCESSED} = ?, ${COL_TG_MESSAGE_ID} = ? WHERE id = ?`,
+            [processed, Number(tgMessageId), docId]
+        )
+
+        await db.commit()
+    } catch (error) {
+        try {
+            await db.rollback()
+        } catch (_) {}
+        throw error
+    } finally {
+        await db.end()
+    }
+}
+
+async function sendDocument(chatId, doc) {
+
+    const docDate = new Date(doc[COL_DATE]).toLocaleString('en-US', {
+        year: 'numeric', month: '2-digit', day: '2-digit'
+    })
+
+    let text = 
+    `
+    ${doc[COL_PREFIX]}-${doc[COL_NUMBER]} from ${docDate}
+    Title: ${doc[COL_TITLE]}
+    Source: ${doc[COL_SOURCE]}
+    Description: ${doc[COL_DESCRIPTION]}
+    Action: ${doc[COL_ACTION]}
+    `
+
+    const res = await telegram('sendMessage', {
         chat_id: chatId, text: text, reply_markup: {
             inline_keyboard: [[ confirmButtons, rejectButtons, replyButtons ]],
         }
     })
+
+    return res.message_id
 }
 
 async function handleDocumentAction(chatId, messageId, action) {
@@ -83,16 +187,16 @@ async function handleDocumentAction(chatId, messageId, action) {
 // --- onRequest ---
 
 export async function onRequest(req, ctx) {
-	const msgType = req.getParam('s1ra')
-	if (!msgType) throw new Error('Missing s1ra parameter')
+	const docType = req.getParam('c6rq')
+	if (!docType) throw new Error('Missing c6rq parameter')
 
-    switch (msgType) {
+    switch (docType) {
         case 'v5hx': {
             await sendNotification('New document created.')
             break
         }
         default:
-            throw new Error(`Unsupported s1ra value: ${msgType}`)
+            throw new Error(`Unsupported c6rq value: ${docType}`)
     }
 
 	ctx.close({ result: 'Ok' })
@@ -121,6 +225,11 @@ export async function onWebhook(req, ctx) {
 
         await handleDocumentAction(chatId, messageId, action)
 
+        const doc = await getDocumentByMessageId(messageId)
+        if (doc) {
+            await setDocumentProcessed(doc.id, 2, 0) // 2 - closed
+        }
+
         ctx.close({
             action: action,
             body: update,
@@ -132,12 +241,21 @@ export async function onWebhook(req, ctx) {
 
         // Пользователь нажал на команду /support
         if (text === '/support') {
-            await sendDocument(chatId, 'Please confirm or reject the document.')
+            const doc = await getAnyDocument('v5hx')
+            if (doc) {
+                const tgMessageId = await sendDocument(chatId, doc)
+                await setDocumentProcessed(doc.id, 1, tgMessageId) // 1 - active
+            } else {
+                await telegram('sendMessage', {
+                    chat_id: chatId,
+                    text: 'No pending documents to confirm.',
+                })
+            }
         }
 
-		ctx.close({
+        ctx.close({
             reply: text,
-			body: update,
-		})
-	}
+            body: update,
+        })
+    }
 }

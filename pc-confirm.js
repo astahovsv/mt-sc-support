@@ -9,6 +9,7 @@ const dbConfig = {
 }
 
 const DOC_PREFIX = 'CR/SP'
+const DOC_TYPE = 'v5hx'
 
 function getCurrentPeriod() {
     const now = new Date()
@@ -57,12 +58,12 @@ async function createDocument(contextId, title, source, description, action) {
 
         await db.execute(
             `
-            INSERT INTO gc8e (q4lz, mts3, z6om, cg2y, tob7, aid4, e7kx, b8om)
+            INSERT INTO gc8e (q4lz, mts3, z6om, cg2y, c6rq, tob7, aid4, e7kx, b8om)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             `,
             [
                 contextId, documentDate, DOC_PREFIX, documentNumber,
-                title, source, description, action,
+                DOC_TYPE, title, source, description, action,
             ]
         )
 
@@ -92,7 +93,7 @@ export async function onRequest(req, ctx) {
     const docId = await createDocument(contextId, title, source, description, action)
 
     ctx.pushRequest('com.persapps.confirm.tg', '1.0.*', {
-        's1ra': 'v5hx',
+        'c6rq': DOC_TYPE,
     })
 
     ctx.close({
