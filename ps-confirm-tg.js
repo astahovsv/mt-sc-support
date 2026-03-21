@@ -1,5 +1,21 @@
 import mysql from 'mysql2/promise'
 
+const REQ_DOCUMENT_TYPE = 'c6rq'
+
+const RES_DOCUMENT_ID = 'bk3s'
+const RES_CONFIRM_ACTION = 'me6w'
+const RES_CONFIRM_TEXT = 'n8q7'
+
+const DOCUMENT_SUPPORT = 'v5hx'
+
+const ACTION_CONFIRM = 't3oz'
+const ACTION_REJECT = 'ht8n'
+const ACTION_REPLY = 'pb0r'
+const ACTION_CANCEL = 'c8s9'
+
+const WAKE_UP_ANSWER_INTERVAL = 60 * 60 // 1 hour
+const WAKE_UP_ANSWER_TAG = 's9jr'
+
 
 // --- telegram config ---
 
@@ -9,24 +25,24 @@ if (!token) throw new Error('Missing TELEGRAM_BOT_TOKEN')
 const supportedChatIds = process.env.TELEGRAM_CHAT_IDS?.split(',').map(id => id.trim())
 
 async function telegram(method, payload) {
-	const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
-		method: 'POST',
-		headers: { 'content-type': 'application/json' },
-		body: JSON.stringify(payload),
-	})
+    const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+    })
 
-	const body = await response.json()
+    const body = await response.json()
 
-	if (!body.ok) {
-		throw new Error(`Telegram API error in ${method}: ${JSON.stringify(body)}`)
-	}
+    if (!body.ok) {
+        throw new Error(`Telegram API error in ${method}: ${JSON.stringify(body)}`)
+    }
 
-	return body.result
+    return body.result
 }
 
-const confirmButtons = { text: 'Confirm', callback_data: 'confirm' }
-const rejectButtons = { text: 'Reject', callback_data: 'reject' }
-const replyButtons = { text: 'Reply', callback_data: 'reply' }
+const confirmButtons = { text: 'Confirm', callback_data: ACTION_CONFIRM }
+const rejectButtons = { text: 'Reject', callback_data: ACTION_REJECT }
+const replyButtons = { text: 'Reply', callback_data: ACTION_REPLY }
 
 
 // --- database config ---
@@ -44,9 +60,9 @@ const COL_ACTION = 'b8om'
 const COL_CALLBACK_ID = 'q4lz'
 const COL_CALLBACK_TAG = 'm8gp'
 const COL_PROCESSED = 'up8s'
-const COL_TG_MESSAGE_ID = 'a6ng'
+const COL_ACTIVE_TOKEN = 'a6ng'
 
-const PROCESSED_NEW = 0
+const PROCESSED_PENDING = 0
 const PROCESSED_ACTIVE = 1
 const PROCESSED_CLOSED = 2
 
@@ -79,7 +95,44 @@ async function databaseBlock(block) {
 
 // --- operations ---
 
-async function sendNotification(text) {
+async function getDocumentById(id) {
+    return await databaseBlock(async (db) => {
+        const [rows] = await db.execute(
+            `SELECT * FROM ${TABLE_DOCS} WHERE id = ?`, [id]
+        )
+        return (rows.length > 0) ? rows[0] : null
+    })
+}
+
+async function getDocumentByToken(token) {
+    return await databaseBlock(async (db) => {
+        const [rows] = await db.execute(
+            `SELECT * FROM ${TABLE_DOCS} WHERE ${COL_ACTIVE_TOKEN} = ?`, [token]
+        )
+        return (rows.length > 0) ? rows[0] : null
+    })
+}
+
+async function setDocumentProcessed(docId, processed, token) {
+    await databaseBlock(async (db) => {
+        await db.execute(
+            `UPDATE ${TABLE_DOCS} SET ${COL_PROCESSED} = ?, ${COL_ACTIVE_TOKEN} = ? WHERE id = ?`,
+            [processed, token, docId]
+        )
+    })
+}
+
+async function getAnyDocument(docType) {
+    return await databaseBlock(async (db) => {
+        const [rows] = await db.execute(
+            `SELECT * FROM ${TABLE_DOCS} WHERE ${COL_TYPE} = ? AND ${COL_PROCESSED} = ? LIMIT 1`, 
+            [docType, PROCESSED_PENDING]
+        )
+        return (rows.length > 0) ? rows[0] : null
+    })
+}
+
+async function presentMessageForAll(text) {
     for (const chatId of supportedChatIds) {
         await telegram('sendMessage', {
             chat_id: chatId, text: text
@@ -87,35 +140,13 @@ async function sendNotification(text) {
     }
 }
 
-async function getAnyDocument(docType) {
-    return await databaseBlock(async (db) => {
-        const [rows] = await db.execute(
-            `SELECT * FROM ${TABLE_DOCS} WHERE ${COL_TYPE} = ? AND ${COL_PROCESSED} = ? LIMIT 1`, 
-            [docType, PROCESSED_NEW]
-        )
-        return (rows.length > 0) ? rows[0] : null
+async function presentMessage(chatId, text) {
+    await telegram('sendMessage', {
+        chat_id: chatId, text: text
     })
 }
 
-async function getDocumentByMessageId(tgMessageId) {
-    return await databaseBlock(async (db) => {
-        const [rows] = await db.execute(
-            `SELECT * FROM ${TABLE_DOCS} WHERE ${COL_TG_MESSAGE_ID} = ?`, [tgMessageId]
-        )
-        return (rows.length > 0) ? rows[0] : null
-    })
-}
-
-async function setDocumentProcessed(docId, processed, tgMessageId) {
-    await databaseBlock(async (db) => {
-        await db.execute(
-            `UPDATE ${TABLE_DOCS} SET ${COL_PROCESSED} = ?, ${COL_TG_MESSAGE_ID} = ? WHERE id = ?`,
-            [processed, Number(tgMessageId), docId]
-        )
-    })
-}
-
-async function sendDocument(chatId, doc) {
+async function presentDocument(chatId, doc) {
 
     const docDate = new Date(doc[COL_DATE]).toLocaleString('en-US', {
         year: 'numeric', month: '2-digit', day: '2-digit'
@@ -139,110 +170,167 @@ Action: ${doc[COL_ACTION]}
     return res.message_id
 }
 
-async function handleDocumentAction(chatId, messageId, action) {
-
-    // Удаляем кнопки у исходного сообщения
-    await telegram('editMessageReplyMarkup', {
-        chat_id: chatId,
-        message_id: messageId,
-        reply_markup: {
-            inline_keyboard: [],
-        },
+async function presentReply(chatId, messageId) {
+    const res = await telegram('sendMessage', {
+        chat_id: chatId, text: 'Your reply:',
+        reply_markup: { force_reply: true },
+        reply_to_message_id: messageId,
     })
+    return res.message_id
+}
 
-    if (action === confirmButtons.callback_data || action === rejectButtons.callback_data) {
-        await telegram('sendMessage', {
-            chat_id: chatId,
-            text: `Your answer: ${action}`,
-        })
-    }
-    else if (action === replyButtons.callback_data) {
-        await telegram('sendMessage', {
-            chat_id: chatId,
-            text: 'Your reply:',
-            reply_markup: {
-                force_reply: true,
-            },
-            reply_to_message_id: messageId,
-        })
-    }
+async function removeButtons(chatId, messageId) {
+    await telegram('editMessageReplyMarkup', {
+        chat_id: chatId, message_id: messageId,
+        reply_markup: { inline_keyboard: [] },
+    })
+}
+
+async function removeMessage(chatId, messageId) {
+    await telegram('deleteMessage', {
+        chat_id: chatId, message_id: messageId,
+    })
+}
+
+function sendResponse(ctx, doc, action, text = null) {
+    ctx.pushResponse(doc[COL_CALLBACK_ID], doc[COL_CALLBACK_TAG], {
+        [RES_DOCUMENT_ID]: doc.id,
+        [RES_CONFIRM_ACTION]: action,
+        [RES_CONFIRM_TEXT]: text,
+    })
 }
 
 
 // --- onRequest ---
 
 export async function onRequest(req, ctx) {
-	const docType = req.getParam('c6rq')
-	if (!docType) throw new Error('Missing c6rq parameter')
+    const docType = req.getParam(REQ_DOCUMENT_TYPE)
+    if (!docType) throw new Error(`Missing ${REQ_DOCUMENT_TYPE} parameter`)
 
     switch (docType) {
-        case 'v5hx': {
-            await sendNotification('New document created.')
+        case DOCUMENT_SUPPORT: {
+            await presentMessageForAll('New request from support.')
             break
         }
         default:
-            throw new Error(`Unsupported c6rq value: ${docType}`)
+            throw new Error(`Unsupported ${REQ_DOCUMENT_TYPE} value: ${docType}`)
     }
 
     // Ответ будет отправлять другой контекст
-	ctx.closeWithoutAnswer({ result: 'Ok' })
+    ctx.closeWithoutAnswer({ result: 'Ok' })
+}
+
+
+// --- onWakeUp ---
+
+export async function onWakeUp(tag, req, ctx) { 
+    if (!tag) throw new Error('Wake-up tag is missing')
+
+    const [wakeUpTag, docId] = tag.split(':')
+    if (wakeUpTag === WAKE_UP_ANSWER_TAG) {
+
+        const doc = await getDocumentById(docId)
+        if (!doc) throw new Error(`Document with id ${docId} not found for wake-up tag ${tag}`)
+        
+        const [chatId, messageId] = doc[COL_ACTIVE_TOKEN].split(':')
+        if (messageId) {
+            await setDocumentProcessed(doc.id, PROCESSED_PENDING, null)
+            await removeMessage(chatId, messageId)
+            ctx.closeWithoutAnswer({ status: `timeout` })
+        } else {
+            ctx.closeWithoutAnswer({ status: `ok` })
+        }
+    } else {
+        throw new Error(`Unsupported wake-up tag: ${wakeUpTag}`)
+    }
 }
 
 
 // --- onWebhook ---
 
 export async function onWebhook(req, ctx) {
-	const body = req.getParam('body')
-	const update = JSON.parse(body)
+    const body = req.getParam('body')
+    const update = JSON.parse(body)
 
     const chatId = update.message?.chat?.id || update.callback_query?.message?.chat?.id
     if (!supportedChatIds.includes(String(chatId))) {
         throw new Error(`Received update from unsupported chat ID ${chatId}.`)
     }
 
-	// Нажатие на inline-кнопку
-	if (update.callback_query) {
-		const callbackId = update.callback_query.id
-		const action = update.callback_query.data
-		const messageId = update.callback_query.message.message_id
+    // Нажатие на inline-кнопку
+    if (update.callback_query) {
 
-		await telegram('answerCallbackQuery', {
-			callback_query_id: callbackId,
-		})
+        const callbackId = update.callback_query.id
+        const action = update.callback_query.data
+        const messageId = update.callback_query.message.message_id
 
-        await handleDocumentAction(chatId, messageId, action)
+        await telegram('answerCallbackQuery', { callback_query_id: callbackId})
+        await removeButtons(chatId, messageId)
 
-        const doc = await getDocumentByMessageId(messageId)
-        if (doc) {
-            await setDocumentProcessed(doc.id, PROCESSED_CLOSED, 0)
+        const doc = await getDocumentByToken(`${chatId}:${messageId}`)
+        if (!doc) throw new Error(`Document with token ${chatId}:${messageId} not found for callback query`)
+
+        if (action === ACTION_CONFIRM || action === ACTION_REJECT) {
+            const actionTitle = (action === ACTION_CONFIRM) ? 'Confirm' : 'Reject'
+            await setDocumentProcessed(doc.id, PROCESSED_CLOSED, null)
+            await presentMessage(chatId, `Answer accepted: ${actionTitle}.`)
+            sendResponse(ctx, doc, action)
+            ctx.closeWithoutAnswer({ status: `action: ${actionTitle}`, body: update})
+        }
+        else if (action === ACTION_REPLY) {
+            const newMessageId = await presentReply(chatId, messageId)
+            await setDocumentProcessed(doc.id, PROCESSED_ACTIVE, `${chatId}:${newMessageId}`)
+            ctx.closeWithoutAnswer({ status: `action: Reply`, body: update})
+        }
+        else if (action === ACTION_CANCEL) {
+            await setDocumentProcessed(doc.id, PROCESSED_CLOSED, null)
+            await removeMessage(chatId, messageId)
+            ctx.closeWithoutAnswer({ status: `action: Cancel`, body: update})
+        }
+        else {
+            ctx.closeWithoutAnswer({ status: `Unknown action: ${action}`, body: update })
+        }
+    }
+
+    // Текстовый ответ пользователя
+    else if (update.message?.text) {
+
+        const text = update.message.text
+        const replyTo = update.message.reply_to_message
+
+        // Ответ на force_reply
+        if (replyTo) {
+            const messageId = replyTo.message_id
+
+            const doc = await getDocumentByToken(`${chatId}:${messageId}`)
+            if (!doc) throw new Error(`Document with token ${chatId}:${messageId} not found for reply`)
+
+            await setDocumentProcessed(doc.id, PROCESSED_CLOSED, null)
+            await presentMessage(chatId, `Answer accepted: Reply.`)
+            sendResponse(ctx, doc, ACTION_REPLY, text)
+            ctx.closeWithoutAnswer({ status: `Reply`, body: update })
         }
 
-        ctx.close({
-            action: action,
-            body: update,
-        })
-	}
-	// Текстовый ответ пользователя
-	else if (update.message?.text) {
-		const text = update.message.text
+        // Нажатие на команду /support
+        else if (text === '/support') {
 
-        // Пользователь нажал на команду /support
-        if (text === '/support') {
-            const doc = await getAnyDocument('v5hx')
+            const doc = await getAnyDocument(DOCUMENT_SUPPORT)
             if (doc) {
-                const tgMessageId = await sendDocument(chatId, doc)
-                await setDocumentProcessed(doc.id, PROCESSED_ACTIVE, tgMessageId)
-            } else {
-                await telegram('sendMessage', {
-                    chat_id: chatId,
-                    text: 'No pending documents to confirm.',
-                })
+                const messageId = await presentDocument(chatId, doc)
+                await setDocumentProcessed(doc.id, PROCESSED_ACTIVE, `${chatId}:${messageId}`)
+                ctx.setWakeUpInterval(WAKE_UP_ANSWER_INTERVAL, `${WAKE_UP_ANSWER_TAG}:${doc.id}`)
+                // Контекст будет закрыт в onWakeUp
+                // ctx.closeWithoutAnswer()
+            } 
+            else {
+                await presentMessage(chatId, 'No pending documents to confirm.')
+                ctx.closeWithoutAnswer({ status: text, body: update })
             }
         }
 
-        ctx.close({
-            reply: text,
-            body: update,
-        })
+        // Другие дествия, не поддерживаемые в данный момент
+        else {
+            ctx.closeWithoutAnswer({ status: `Unknown command`, body: update })
+        }
     }
 }

@@ -1,5 +1,14 @@
 import mysql from 'mysql2/promise'
 
+const REQ_TITLE = 'tob7'
+const RES_SOURCE = 'aid4'
+const RES_DESCRIPTION = 'e7kx'
+const RES_ACTION = 'b8om'
+
+const TG_SCRIPT_NAME = 'com.persapps.confirm.tg'
+const TG_SCRIPT_VERSION = '1.0.*'
+const TG_REQ_DOCUMENT_TYPE = 'c6rq'
+
 
 // --- database config ---
 
@@ -46,6 +55,7 @@ async function databaseBlock(block) {
         await db.end()
     }
 }
+
 
 // --- operations ---
 
@@ -111,19 +121,22 @@ async function createDocument(contextId, title, source, description, action) {
 export async function onRequest(req, ctx) {
 
     const contextId = ctx.getContextID()
-    const title = req.getParam('tob7') ?? ''
-    const source = req.getParam('aid4') ?? ''
-    const description = req.getParam('e7kx') ?? ''
-    const action = req.getParam('b8om') ?? ''
+    const title = req.getParam(REQ_TITLE) ?? ''
+    const source = req.getParam(RES_SOURCE) ?? ''
+    const description = req.getParam(RES_DESCRIPTION) ?? ''
+    const action = req.getParam(RES_ACTION) ?? ''
 
     const docId = await createDocument(contextId, title, source, description, action)
 
-    ctx.pushRequest('com.persapps.confirm.tg', '1.0.*', {
-        'c6rq': DOC_TYPE,
+    ctx.pushRequest(TG_SCRIPT_NAME, TG_SCRIPT_VERSION, {
+        [TG_REQ_DOCUMENT_TYPE]: DOC_TYPE,
     })
+}
+
+export async function onResponse(responses, req, ctx) {
 
     ctx.close({
         ok: true,
-        docId: docId,
+        responses: responses,
     })
 }
