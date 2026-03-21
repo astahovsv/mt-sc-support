@@ -1,26 +1,7 @@
 import mysql from 'mysql2/promise'
 
-const TABLE_DOCS = 'gc8e'
 
-const COL_CONTEXT = 'q4lz'
-const COL_DATE = 'mts3'
-const COL_PREFIX = 'z6om'
-const COL_NUMBER = 'cg2y'
-const COL_TYPE = 'c6rq'
-const COL_TITLE = 'tob7'
-const COL_SOURCE = 'aid4'
-const COL_DESCRIPTION = 'e7kx'
-const COL_ACTION = 'b8om'
-const COL_PROCESSED = 'up8s'
-const COL_TG_MESSAGE_ID = 'a6ng'
-
-const dbConfig = {
-    host: process.env.DB_HOST ?? 'localhost',
-    port: process.env.DB_PORT ?? 3306,
-    user: process.env.DB_USERNAME,
-    password: process.env.DB_PASSWORD,
-    database: process.env.DB_NAME
-}
+// --- telegram config ---
 
 const token = process.env.TELEGRAM_BOT_TOKEN
 if (!token) throw new Error('Missing TELEGRAM_BOT_TOKEN')
@@ -47,6 +28,55 @@ const confirmButtons = { text: 'Confirm', callback_data: 'confirm' }
 const rejectButtons = { text: 'Reject', callback_data: 'reject' }
 const replyButtons = { text: 'Reply', callback_data: 'reply' }
 
+
+// --- database config ---
+
+const TABLE_DOCS = 'gc8e'
+
+const COL_DATE = 'mts3'
+const COL_TYPE = 'c6rq'
+const COL_PREFIX = 'z6om'
+const COL_NUMBER = 'cg2y'
+const COL_TITLE = 'tob7'
+const COL_SOURCE = 'aid4'
+const COL_DESCRIPTION = 'e7kx'
+const COL_ACTION = 'b8om'
+const COL_CALLBACK_ID = 'q4lz'
+const COL_CALLBACK_TAG = 'm8gp'
+const COL_PROCESSED = 'up8s'
+const COL_TG_MESSAGE_ID = 'a6ng'
+
+const PROCESSED_NEW = 0
+const PROCESSED_ACTIVE = 1
+const PROCESSED_CLOSED = 2
+
+const dbConfig = {
+    host: process.env.DB_HOST ?? 'localhost',
+    port: process.env.DB_PORT ?? 3306,
+    user: process.env.DB_USERNAME,
+    password: process.env.DB_PASSWORD,
+    database: process.env.DB_NAME
+}
+
+async function databaseBlock(block) {
+    const db = await mysql.createConnection(dbConfig)
+
+    try {
+        await db.beginTransaction()
+        const result = await block(db)
+        await db.commit()
+        return result
+    } catch (error) {
+        try {
+            await db.rollback()
+        } catch (_) {}
+        throw error
+    } finally {
+        await db.end()
+    }
+}
+
+
 // --- operations ---
 
 async function sendNotification(text) {
@@ -58,77 +88,31 @@ async function sendNotification(text) {
 }
 
 async function getAnyDocument(docType) {
-    const db = await mysql.createConnection(dbConfig)
-
-    let doc = null
-
-    try {
-        await db.beginTransaction()
-
+    return await databaseBlock(async (db) => {
         const [rows] = await db.execute(
-            `SELECT * FROM ${TABLE_DOCS} WHERE ${COL_TYPE} = ? AND ${COL_PROCESSED} = 0 LIMIT 1`, [docType]
+            `SELECT * FROM ${TABLE_DOCS} WHERE ${COL_TYPE} = ? AND ${COL_PROCESSED} = ? LIMIT 1`, 
+            [docType, PROCESSED_NEW]
         )
-        doc = (rows.length > 0) ? rows[0] : null
-
-        await db.commit()
-    } catch (error) {
-        try {
-            await db.rollback()
-        } catch (_) {}
-        throw error
-    } finally {
-        await db.end()
-    }
-
-    return doc
+        return (rows.length > 0) ? rows[0] : null
+    })
 }
 
 async function getDocumentByMessageId(tgMessageId) {
-    const db = await mysql.createConnection(dbConfig)
-
-    let doc = null
-
-    try {
-        await db.beginTransaction()
-
+    return await databaseBlock(async (db) => {
         const [rows] = await db.execute(
             `SELECT * FROM ${TABLE_DOCS} WHERE ${COL_TG_MESSAGE_ID} = ?`, [tgMessageId]
         )
-        doc = (rows.length > 0) ? rows[0] : null
-
-        await db.commit()
-    } catch (error) {
-        try {
-            await db.rollback()
-        } catch (_) {}
-        throw error
-    } finally {
-        await db.end()
-    }
-
-    return doc
+        return (rows.length > 0) ? rows[0] : null
+    })
 }
 
 async function setDocumentProcessed(docId, processed, tgMessageId) {
-    const db = await mysql.createConnection(dbConfig)
-
-    try {
-        await db.beginTransaction()
-
+    await databaseBlock(async (db) => {
         await db.execute(
             `UPDATE ${TABLE_DOCS} SET ${COL_PROCESSED} = ?, ${COL_TG_MESSAGE_ID} = ? WHERE id = ?`,
             [processed, Number(tgMessageId), docId]
         )
-
-        await db.commit()
-    } catch (error) {
-        try {
-            await db.rollback()
-        } catch (_) {}
-        throw error
-    } finally {
-        await db.end()
-    }
+    })
 }
 
 async function sendDocument(chatId, doc) {
@@ -184,6 +168,7 @@ async function handleDocumentAction(chatId, messageId, action) {
     }
 }
 
+
 // --- onRequest ---
 
 export async function onRequest(req, ctx) {
@@ -199,8 +184,10 @@ export async function onRequest(req, ctx) {
             throw new Error(`Unsupported c6rq value: ${docType}`)
     }
 
-	ctx.close({ result: 'Ok' })
+    // Ответ будет отправлять другой контекст
+	ctx.closeWithoutAnswer({ result: 'Ok' })
 }
+
 
 // --- onWebhook ---
 
@@ -227,7 +214,7 @@ export async function onWebhook(req, ctx) {
 
         const doc = await getDocumentByMessageId(messageId)
         if (doc) {
-            await setDocumentProcessed(doc.id, 2, 0) // 2 - closed
+            await setDocumentProcessed(doc.id, PROCESSED_CLOSED, 0)
         }
 
         ctx.close({
@@ -244,7 +231,7 @@ export async function onWebhook(req, ctx) {
             const doc = await getAnyDocument('v5hx')
             if (doc) {
                 const tgMessageId = await sendDocument(chatId, doc)
-                await setDocumentProcessed(doc.id, 1, tgMessageId) // 1 - active
+                await setDocumentProcessed(doc.id, PROCESSED_ACTIVE, tgMessageId)
             } else {
                 await telegram('sendMessage', {
                     chat_id: chatId,

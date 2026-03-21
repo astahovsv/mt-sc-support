@@ -1,17 +1,21 @@
 import mysql from 'mysql2/promise'
 
+
+// --- database config ---
+
 const TABLE_DOCS = 'gc8e'
 const TABLE_COUNTER = 'k8cf'
 
 const COL_PERIOD = 'h7pk'
-const COL_CONTEXT = 'q4lz'
 const COL_DATE = 'mts3'
+const COL_TYPE = 'c6rq'
 const COL_PREFIX = 'z6om'
 const COL_NUMBER = 'cg2y'
-const COL_TYPE = 'c6rq'
 const COL_TITLE = 'tob7'
 const COL_SOURCE = 'aid4'
 const COL_DESCRIPTION = 'e7kx'
+const COL_CALLBACK_ID = 'q4lz'
+const COL_CALLBACK_TAG = 'm8gp'
 const COL_ACTION = 'b8om'
 
 const dbConfig = {
@@ -25,6 +29,26 @@ const dbConfig = {
 const DOC_PREFIX = 'CR/SP'
 const DOC_TYPE = 'v5hx'
 
+async function databaseBlock(block) {
+    const db = await mysql.createConnection(dbConfig)
+
+    try {
+        await db.beginTransaction()
+        const result = await block(db)
+        await db.commit()
+        return result
+    } catch (error) {
+        try {
+            await db.rollback()
+        } catch (_) {}
+        throw error
+    } finally {
+        await db.end()
+    }
+}
+
+// --- operations ---
+
 function getCurrentPeriod() {
     const now = new Date()
     const year = now.getUTCFullYear()
@@ -36,19 +60,12 @@ function getCurrentDateOnly() {
     return new Date().toISOString().slice(0, 10) // YYYY-MM-DD
 }
 
-// --- operations ---
-
 async function createDocument(contextId, title, source, description, action) {
 
     const period = getCurrentPeriod()
     const documentDate = getCurrentDateOnly()
-    let documentNumber
 
-    const db = await mysql.createConnection(dbConfig)
-
-    try {
-
-        await db.beginTransaction()
+    const documentNumber = await databaseBlock(async (db) => {
 
         // Блокируем строку счетчика, если она уже есть
         const [rows] = await db.execute(
@@ -56,43 +73,38 @@ async function createDocument(contextId, title, source, description, action) {
             [DOC_PREFIX, period]
         )
 
+        let number
         if (rows.length === 0) {
-            documentNumber = 1
+            number = 1
             await db.execute(
                 `INSERT INTO ${TABLE_COUNTER} (${COL_PREFIX}, ${COL_PERIOD}, ${COL_NUMBER}) VALUES (?, ?, ?)`,
-                [DOC_PREFIX, period, documentNumber]
+                [DOC_PREFIX, period, number]
             )
         } else {
-            documentNumber = Number(rows[0][COL_NUMBER]) + 1
+            number = Number(rows[0][COL_NUMBER]) + 1
             await db.execute(
                 `UPDATE ${TABLE_COUNTER} SET ${COL_NUMBER} = ? WHERE ${COL_PREFIX} = ? AND ${COL_PERIOD} = ?`,
-                [documentNumber, DOC_PREFIX, period]
+                [number, DOC_PREFIX, period]
             )
         }
 
         await db.execute(
             `
-            INSERT INTO ${TABLE_DOCS} (${COL_CONTEXT}, ${COL_DATE}, ${COL_PREFIX}, ${COL_NUMBER}, ${COL_TYPE}, ${COL_TITLE}, ${COL_SOURCE}, ${COL_DESCRIPTION}, ${COL_ACTION})
+            INSERT INTO ${TABLE_DOCS} (${COL_DATE}, ${COL_TYPE}, ${COL_PREFIX}, ${COL_NUMBER}, ${COL_TITLE}, ${COL_SOURCE}, ${COL_DESCRIPTION}, ${COL_ACTION}, ${COL_CALLBACK_ID})
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             `,
             [
-                contextId, documentDate, DOC_PREFIX, documentNumber,
-                DOC_TYPE, title, source, description, action,
+                documentDate, DOC_TYPE, DOC_PREFIX, number,
+                title, source, description, action, contextId,
             ]
         )
-
-        await db.commit()
-    } catch (error) {
-        try {
-            await db.rollback()
-        } catch (_) {}
-        throw error
-    } finally {
-        await db.end()
-    }
+        
+        return number
+    })
 
     return `${DOC_PREFIX}-${period}-${documentNumber}`
 }
+
 
 // --- onRequest ---
 
