@@ -268,7 +268,11 @@ export async function onWebhook(req, ctx) {
         await removeButtons(chatId, messageId)
 
         const doc = await getDocumentByToken(`${chatId}:${messageId}`)
-        if (!doc) throw new Error(`Document with token ${chatId}:${messageId} not found for callback query`)
+        if (!doc) {
+            await presentMessage(chatId, 'Document not found or already processed.')
+            ctx.closeWithoutAnswer({ status: `Document not found for token ${chatId}:${messageId}`, body: update })
+            return
+        }
 
         if (action === ACTION_CONFIRM || action === ACTION_REJECT) {
             const actionTitle = (action === ACTION_CONFIRM) ? 'Confirm' : 'Reject'
@@ -303,7 +307,11 @@ export async function onWebhook(req, ctx) {
             const messageId = replyTo.message_id
 
             const doc = await getDocumentByToken(`${chatId}:${messageId}`)
-            if (!doc) throw new Error(`Document with token ${chatId}:${messageId} not found for reply`)
+            if (!doc) {
+                await presentMessage(chatId, 'Document not found or already processed.')
+                ctx.closeWithoutAnswer({ status: `Document not found for token ${chatId}:${messageId}`, body: update })
+                return
+            }
 
             await setDocumentProcessed(doc.id, PROCESSED_CLOSED, null)
             await presentMessage(chatId, `Answer accepted: Reply.`)
