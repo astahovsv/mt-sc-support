@@ -1,5 +1,9 @@
 import mysql from 'mysql2/promise'
 
+const GPT_SCRIPT_NAME = 'com.persapps.support.agent'
+const GPT_SCRIPT_VERSION = '1.0.*'
+const GPT_REQ_MESSAGE = 'r1cb'
+
 
 // --- freescout config ---
 
@@ -154,6 +158,7 @@ function getMessage(item) {
     return texts.join('\n')
 }
 
+
 // --- onRequest ---
 
 export async function onRequest(req, ctx) {
@@ -172,7 +177,9 @@ export async function onRequest(req, ctx) {
             const item = await getFreescoutItem(id)
             const message = getMessage(item)
 
-            ctx.closeWithoutAnswer({ status: 'New item', item, message })
+            ctx.pushRequest(GPT_SCRIPT_NAME, GPT_SCRIPT_VERSION, {
+                [GPT_REQ_MESSAGE]: message
+            })
             return
         } catch (error) {
             try {
@@ -184,4 +191,15 @@ export async function onRequest(req, ctx) {
     }
 
     ctx.closeWithoutAnswer({ status: 'No new items' })
+}
+
+
+// --- onResponse ---
+
+export async function onResponse(responses, req, ctx) {
+
+    ctx.close({
+        ok: true,
+        responses: responses,
+    })
 }

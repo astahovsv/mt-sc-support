@@ -2,6 +2,13 @@ import OpenAI from "openai";
 
 const REQ_MESSAGE = 'r1cb'
 
+const CONFIRM_SCRIPT_NAME = 'com.persapps.confirm'
+const CONFIRM_SCRIPT_VERSION = '1.0.*'
+const CONFIRM_REQ_TITLE = 'tob7'
+const CONFIRM_RES_SOURCE = 'aid4'
+const CONFIRM_RES_DESCRIPTION = 'e7kx'
+const CONFIRM_RES_ACTION = 'b8om'
+
 
 // --- openai config ---
 
@@ -32,5 +39,21 @@ export async function onRequest(req, ctx) {
         ]
     })
 
-    ctx.closeWithoutAnswer({ answer: response.output_text })
+    ctx.pushRequest(CONFIRM_SCRIPT_NAME, CONFIRM_SCRIPT_VERSION, {
+        [CONFIRM_REQ_TITLE]: 'Request for confirmation',
+        [CONFIRM_RES_SOURCE]: 'Support Agent',
+        [CONFIRM_RES_DESCRIPTION]: message,
+        [CONFIRM_RES_ACTION]: response.output_text
+    })
+}
+
+
+// --- onResponse ---
+
+export async function onResponse(responses, req, ctx) {
+
+    ctx.close({
+        ok: true,
+        responses: responses,
+    })
 }

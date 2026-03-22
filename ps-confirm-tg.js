@@ -154,10 +154,13 @@ async function presentDocument(chatId, doc) {
 
     let text = 
 `
+==============================
 ${doc[COL_PREFIX]}-${doc[COL_NUMBER]} from ${docDate}
 Title: ${doc[COL_TITLE]}
 Source: ${doc[COL_SOURCE]}
+==============================
 Description: ${doc[COL_DESCRIPTION]}
+==============================
 Action: ${doc[COL_ACTION]}
 `
 
