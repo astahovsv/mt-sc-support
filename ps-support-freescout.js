@@ -106,6 +106,53 @@ async function unregisterId(id) {
     })
 }
 
+function stripHtml(input) {
+    return String(input)
+        .replace(/<[^>]*>/g, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+}
+
+function getCustomerName(customer) {
+    if (!customer) return 'N/A'
+    const firstName = customer.firstName ?? ''
+    const lastName = customer.lastName ?? ''
+    const fullName = `${firstName} ${lastName}`.trim()
+    return fullName || 'N/A'
+}
+
+function getCustomerTitle(customer) {
+    if (!customer) return 'N/A'
+    const name = getCustomerName(customer)
+    if (customer.type === 'user') {
+        return `Support: ${name}`
+    } else {
+        return `Customer: ${name}`
+    }
+}
+
+function getMessage(item) {
+
+    let texts = []
+    texts.push(getCustomerTitle(item.customer))
+    texts.push(`Subject: ${item.subject ?? 'N/A'}`)
+
+    for (const field of item.customFields ?? []) {
+        texts.push(`${field.name}: ${field.value}`)
+    }
+
+    const threads = item._embedded?.threads ?? []
+    for (let i = threads.length - 1; i >= 0; i--) {
+        const thread = threads[i]
+        if (!thread.body) continue
+
+        texts.push('')
+        texts.push(`--- ${getCustomerTitle(thread.createdBy)} ---`)
+        texts.push(stripHtml(thread.body))
+    }
+
+    return texts.join('\n')
+}
 
 // --- onRequest ---
 
@@ -123,7 +170,9 @@ export async function onRequest(req, ctx) {
 
         try {
             const item = await getFreescoutItem(id)
-            ctx.closeWithoutAnswer({ status: 'New item', body: item })
+            const message = getMessage(item)
+
+            ctx.closeWithoutAnswer({ status: 'New item', item, message })
             return
         } catch (error) {
             try {
