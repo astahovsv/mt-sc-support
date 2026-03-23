@@ -92,7 +92,12 @@ function getMessage(item) {
         texts.push(stripHtml(thread.body))
     }
 
-    return texts.join('\n')
+    const fullText = texts.join('\n')
+    if (fullText.length > 1000) {
+        return fullText.slice(0, 1000) + '...'
+    }
+
+    return fullText
 }
 
 
@@ -125,9 +130,8 @@ export async function onRequest(req, ctx) {
 // --- onResponse ---
 
 export async function onResponse(responses, req, ctx) {
+    const response = responses[0]
+    if (!response) throw new Error('No response received from GPT script')
 
-    ctx.close({
-        [RES_OK]: true, [RES_REASON]: 'Handled',
-        responses: responses,
-    })
+    ctx.close(response.result)
 }

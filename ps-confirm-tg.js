@@ -1,12 +1,16 @@
 import mysql from 'mysql2/promise'
 
-const REQ_DOCUMENT_TYPE = 'c6rq'
+const REQ_DOC_CATEGORY = 'c6rq'
 
-const RES_DOCUMENT_ID = 'bk3s'
-const RES_CONFIRM_ACTION = 'me6w'
-const RES_CONFIRM_TEXT = 'n8q7'
+const CATEGORY_SUPPORT = 'v5hx'
 
-const DOCUMENT_SUPPORT = 'v5hx'
+const DOC_DATA = [
+    { category: CATEGORY_SUPPORT, newMessage: 'New request in /support' },
+]
+
+const RES_DOC_ID = 'bk3s'
+const RES_AGREE = 'me6w'
+const RES_MESSAGE = 'n8q7'
 
 const ACTION_CONFIRM = 't3oz'
 const ACTION_REJECT = 'ht8n'
@@ -55,8 +59,8 @@ const COL_PREFIX = 'z6om'
 const COL_NUMBER = 'cg2y'
 const COL_TITLE = 'tob7'
 const COL_SOURCE = 'aid4'
-const COL_DESCRIPTION = 'e7kx'
 const COL_ACTION = 'b8om'
+const COL_DESCRIPTION = 'e7kx'
 const COL_CALLBACK_ID = 'q4lz'
 const COL_CALLBACK_TAG = 'm8gp'
 const COL_PROCESSED = 'up8s'
@@ -154,14 +158,15 @@ async function presentDocument(chatId, doc) {
 
     let text = 
 `
-==============================
+========== Title =============
 ${doc[COL_PREFIX]}-${doc[COL_NUMBER]} from ${docDate}
-Title: ${doc[COL_TITLE]}
-Source: ${doc[COL_SOURCE]}
-==============================
-Description: ${doc[COL_DESCRIPTION]}
-==============================
-Action: ${doc[COL_ACTION]}
+${doc[COL_TITLE]}
+========== Source ============
+${doc[COL_SOURCE]}
+========== Action ============
+${doc[COL_ACTION]}
+======== Description =========
+${doc[COL_DESCRIPTION]}
 `
 
     const res = await telegram('sendMessage', {
@@ -195,11 +200,11 @@ async function removeMessage(chatId, messageId) {
     })
 }
 
-function sendResponse(ctx, doc, action, text = null) {
+function sendResponse(ctx, doc, agree, message = null) {
     ctx.pushResponse(doc[COL_CALLBACK_ID], doc[COL_CALLBACK_TAG], {
-        [RES_DOCUMENT_ID]: doc.id,
-        [RES_CONFIRM_ACTION]: action,
-        [RES_CONFIRM_TEXT]: text,
+        [RES_DOC_ID]: doc.id,
+        [RES_AGREE]: agree,
+        [RES_MESSAGE]: message,
     })
 }
 
@@ -207,17 +212,12 @@ function sendResponse(ctx, doc, action, text = null) {
 // --- onRequest ---
 
 export async function onRequest(req, ctx) {
-    const docType = req.getParam(REQ_DOCUMENT_TYPE)
-    if (!docType) throw new Error(`Missing ${REQ_DOCUMENT_TYPE} parameter`)
+    const docType = req.getParam(REQ_DOC_CATEGORY)
+    if (!docType) throw new Error(`Missing ${REQ_DOC_CATEGORY} parameter`)
+    const docData = DOC_DATA.find(t => t.category === docType)
+    if (!docData) throw new Error(`Unsupported document category: ${docType}`)
 
-    switch (docType) {
-        case DOCUMENT_SUPPORT: {
-            await presentMessageForAll('New request from support.')
-            break
-        }
-        default:
-            throw new Error(`Unsupported ${REQ_DOCUMENT_TYPE} value: ${docType}`)
-    }
+    await presentMessageForAll(docData.newMessage)
 
     // Ответ будет отправлять другой контекст
     ctx.closeWithoutAnswer({ result: 'Ok' })
@@ -277,22 +277,27 @@ export async function onWebhook(req, ctx) {
             return
         }
 
-        if (action === ACTION_CONFIRM || action === ACTION_REJECT) {
-            const actionTitle = (action === ACTION_CONFIRM) ? 'Confirm' : 'Reject'
+        if (action === ACTION_CONFIRM) {
             await setDocumentProcessed(doc.id, PROCESSED_CLOSED, null)
-            await presentMessage(chatId, `Answer accepted: ${actionTitle}.`)
-            sendResponse(ctx, doc, action)
-            ctx.closeWithoutAnswer({ status: `action: ${actionTitle}`, body: update})
+            await presentMessage(chatId, `Answer accepted: 'Confirm'.`)
+            sendResponse(ctx, doc, true)
+            ctx.closeWithoutAnswer({ status: `action: 'Confirm'`, body: update})
+        }
+        else if (action === ACTION_REJECT) {
+            await setDocumentProcessed(doc.id, PROCESSED_CLOSED, null)
+            await presentMessage(chatId, `Answer accepted: 'Reject'.`)
+            sendResponse(ctx, doc, false)
+            ctx.closeWithoutAnswer({ status: `action: 'Reject'`, body: update})
         }
         else if (action === ACTION_REPLY) {
             const newMessageId = await presentReply(chatId, messageId)
             await setDocumentProcessed(doc.id, PROCESSED_ACTIVE, `${chatId}:${newMessageId}`)
-            ctx.closeWithoutAnswer({ status: `action: Reply`, body: update})
+            ctx.closeWithoutAnswer({ status: `action: 'Reply'`, body: update})
         }
         else if (action === ACTION_CANCEL) {
             await setDocumentProcessed(doc.id, PROCESSED_CLOSED, null)
             await removeMessage(chatId, messageId)
-            ctx.closeWithoutAnswer({ status: `action: Cancel`, body: update})
+            ctx.closeWithoutAnswer({ status: `action: 'Cancel'`, body: update})
         }
         else {
             ctx.closeWithoutAnswer({ status: `Unknown action: ${action}`, body: update })
@@ -317,15 +322,15 @@ export async function onWebhook(req, ctx) {
             }
 
             await setDocumentProcessed(doc.id, PROCESSED_CLOSED, null)
-            await presentMessage(chatId, `Answer accepted: Reply.`)
-            sendResponse(ctx, doc, ACTION_REPLY, text)
-            ctx.closeWithoutAnswer({ status: `Reply`, body: update })
+            await presentMessage(chatId, `Answer accepted: 'Reply'.`)
+            sendResponse(ctx, doc, true, text)
+            ctx.closeWithoutAnswer({ status: `action: 'Reply'`, body: update })
         }
 
         // Нажатие на команду /support
         else if (text === '/support') {
 
-            const doc = await getAnyDocument(DOCUMENT_SUPPORT)
+            const doc = await getAnyDocument(CATEGORY_SUPPORT)
             if (doc) {
                 const messageId = await presentDocument(chatId, doc)
                 await setDocumentProcessed(doc.id, PROCESSED_ACTIVE, `${chatId}:${messageId}`)

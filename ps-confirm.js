@@ -1,13 +1,23 @@
 import mysql from 'mysql2/promise'
 
-const REQ_TITLE = 'tob7'
-const RES_SOURCE = 'aid4'
-const RES_DESCRIPTION = 'e7kx'
-const RES_ACTION = 'b8om'
+const REQ_DOC_TYPE = 'hn4a'
+const REQ_SOURCE = 'aid4'
+const REQ_ACTION = 'b8om'
+const REQ_DESCRIPTION = 'e7kx'
+
+const DOC_CATEGORY_SUPPORT = 'v5hx'
+
+const DOC_TYPE_CONFIRM_RESPONSE = 'y2ut'
+const DOC_TYPE_CONFIRM_CHECK = 'w7bg'
+
+const DOC_DATA = [
+    { type: DOC_TYPE_CONFIRM_RESPONSE, category: DOC_CATEGORY_SUPPORT, prefix: 'CR/SUPP', title: 'Request for confirmation response' },
+    { type: DOC_TYPE_CONFIRM_CHECK, category: DOC_CATEGORY_SUPPORT, prefix: 'CR/CHEK', title: 'Request for confirmation of message parameters' },
+]
 
 const TG_SCRIPT_NAME = 'com.persapps.confirm.tg'
 const TG_SCRIPT_VERSION = '1.0.*'
-const TG_REQ_DOCUMENT_TYPE = 'c6rq'
+const TG_REQ_DOC_CATEGORY = 'c6rq'
 
 
 // --- database config ---
@@ -17,14 +27,13 @@ const TABLE_COUNTER = 'k8cf'
 
 const COL_PERIOD = 'h7pk'
 const COL_DATE = 'mts3'
-const COL_TYPE = 'c6rq'
+const COL_CATEGORY = 'c6rq'
 const COL_PREFIX = 'z6om'
 const COL_NUMBER = 'cg2y'
 const COL_TITLE = 'tob7'
 const COL_SOURCE = 'aid4'
 const COL_DESCRIPTION = 'e7kx'
 const COL_CALLBACK_ID = 'q4lz'
-const COL_CALLBACK_TAG = 'm8gp'
 const COL_ACTION = 'b8om'
 
 const dbConfig = {
@@ -34,9 +43,6 @@ const dbConfig = {
     password: process.env.DB_PASSWORD,
     database: process.env.DB_NAME
 }
-
-const DOC_PREFIX = 'CR/SP'
-const DOC_TYPE = 'v5hx'
 
 async function databaseBlock(block) {
     const db = await mysql.createConnection(dbConfig)
@@ -70,7 +76,7 @@ function getCurrentDateOnly() {
     return new Date().toISOString().slice(0, 10) // YYYY-MM-DD
 }
 
-async function createDocument(contextId, title, source, description, action) {
+async function createDocument(contextId, docData, source, action, description) {
 
     const period = getCurrentPeriod()
     const documentDate = getCurrentDateOnly()
@@ -80,7 +86,7 @@ async function createDocument(contextId, title, source, description, action) {
         // Блокируем строку счетчика, если она уже есть
         const [rows] = await db.execute(
             `SELECT ${COL_NUMBER} FROM ${TABLE_COUNTER} WHERE ${COL_PREFIX} = ? AND ${COL_PERIOD} = ? FOR UPDATE`,
-            [DOC_PREFIX, period]
+            [docData.prefix, period]
         )
 
         let number
@@ -88,55 +94,51 @@ async function createDocument(contextId, title, source, description, action) {
             number = 1
             await db.execute(
                 `INSERT INTO ${TABLE_COUNTER} (${COL_PREFIX}, ${COL_PERIOD}, ${COL_NUMBER}) VALUES (?, ?, ?)`,
-                [DOC_PREFIX, period, number]
+                [docData.prefix, period, number]
             )
         } else {
             number = Number(rows[0][COL_NUMBER]) + 1
             await db.execute(
                 `UPDATE ${TABLE_COUNTER} SET ${COL_NUMBER} = ? WHERE ${COL_PREFIX} = ? AND ${COL_PERIOD} = ?`,
-                [number, DOC_PREFIX, period]
+                [number, docData.prefix, period]
             )
         }
 
         await db.execute(
             `
-            INSERT INTO ${TABLE_DOCS} (${COL_DATE}, ${COL_TYPE}, ${COL_PREFIX}, ${COL_NUMBER}, ${COL_TITLE}, ${COL_SOURCE}, ${COL_DESCRIPTION}, ${COL_ACTION}, ${COL_CALLBACK_ID})
+            INSERT INTO ${TABLE_DOCS} (${COL_DATE}, ${COL_CATEGORY}, ${COL_PREFIX}, ${COL_NUMBER}, ${COL_TITLE}, ${COL_SOURCE}, ${COL_ACTION}, ${COL_DESCRIPTION}, ${COL_CALLBACK_ID})
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             `,
-            [
-                documentDate, DOC_TYPE, DOC_PREFIX, number,
-                title, source, description, action, contextId,
-            ]
+            [documentDate, docData.category, docData.prefix, number, docData.title, source, action, description, contextId]
         )
         
         return number
     })
 
-    return `${DOC_PREFIX}-${period}-${documentNumber}`
+    return `${docData.prefix}-${period}-${documentNumber}`
 }
 
 
 // --- onRequest ---
 
 export async function onRequest(req, ctx) {
+    const docType = req.getParam(REQ_DOC_TYPE)
+    if (!docType) throw new Error('Document type parameter is required')
+    const docData = DOC_DATA.find(t => t.type === docType)
+    if (!docData) throw new Error('Invalid document type')
 
     const contextId = ctx.getContextID()
-    const title = req.getParam(REQ_TITLE) ?? ''
-    const source = req.getParam(RES_SOURCE) ?? ''
-    const description = req.getParam(RES_DESCRIPTION) ?? ''
-    const action = req.getParam(RES_ACTION) ?? ''
+    const action = req.getParam(REQ_ACTION) ?? ''
+    const source = req.getParam(REQ_SOURCE) ?? ''
+    const description = req.getParam(REQ_DESCRIPTION) ?? ''
 
-    const docId = await createDocument(contextId, title, source, description, action)
+    await createDocument(contextId, docData, source, action, description)
 
     ctx.pushRequest(TG_SCRIPT_NAME, TG_SCRIPT_VERSION, {
-        [TG_REQ_DOCUMENT_TYPE]: DOC_TYPE,
+        [TG_REQ_DOC_CATEGORY]: docData.category,
     })
 }
 
 export async function onResponse(responses, req, ctx) {
-
-    ctx.close({
-        ok: true,
-        responses: responses,
-    })
+    ctx.close(responses[0].result)
 }
