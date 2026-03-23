@@ -1,0 +1,125 @@
+import mysql from 'mysql2/promise'
+
+const REQ_LIMIT = 'jv6n'
+
+const CHECK_SCRIPT_NAME = 'com.persapps.support.freescout.check'
+const CHECK_SCRIPT_VERSION = '1.0.*'
+const CHECK_REQ_ID = 'a28q'
+
+
+// --- freescout config ---
+
+const FREESCOUT_HOST = process.env.FREESCOUT_HOST
+if (!FREESCOUT_HOST) throw new Error('Missing FREESCOUT_HOST')
+
+const FREESCOUT_API_KEY = process.env.FREESCOUT_API_KEY
+if (!FREESCOUT_API_KEY) throw new Error('Missing FREESCOUT_API_KEY')
+
+async function fetchJson(url, options = {}) {
+    const res = await fetch(url, options)
+    const text = await res.text()
+    return res.ok ? JSON.parse(text) : null
+}
+
+async function freescout(query) {
+    const url = new URL(query, FREESCOUT_HOST)
+
+    return await fetchJson(url.toString(), {
+        method: 'GET',
+        headers: {
+            'X-FreeScout-API-Key': FREESCOUT_API_KEY,
+            'Accept': 'application/json',
+        },
+    })
+}
+
+
+// --- database config ---
+
+const TABLE_KVMAP = 'e3kt'
+const COL_KEY = 'name'
+const COL_VALUE = 'value'
+const VAL_LAST_ID = 'd1hu'
+
+const dbConfig = {
+    host: process.env.DB_HOST ?? 'localhost',
+    port: process.env.DB_PORT ?? 3306,
+    user: process.env.DB_USERNAME,
+    password: process.env.DB_PASSWORD,
+    database: process.env.DB_NAME,
+}
+
+async function database(block) {
+    const db = await mysql.createConnection(dbConfig)
+
+    try {
+        await db.beginTransaction()
+        const result = await block(db)
+        await db.commit()
+        return result
+    } catch (error) {
+        try {
+            await db.rollback()
+        } catch (_) {}
+        throw error
+    } finally {
+        await db.end()
+    }
+}
+
+
+// --- operations ---
+
+async function getFreescoutItem(id) {
+    return await freescout(`/api/conversations/${id}`)
+}
+
+function getNextId() {
+    return database(async (db) => {
+        const [rows] = await db.execute(
+            `SELECT ${COL_VALUE} FROM ${TABLE_KVMAP} WHERE ${COL_KEY} = ?`,
+            [VAL_LAST_ID]
+        )
+
+        let number
+        if (rows.length === 0) {
+            number = 1
+            await db.execute(
+                `INSERT INTO ${TABLE_KVMAP} (${COL_KEY}, ${COL_VALUE}) VALUES (?, ?)`,
+                [VAL_LAST_ID, number]
+            )
+        } else {
+            number = Number(rows[0][COL_VALUE]) + 1
+            await db.execute(
+                `UPDATE ${TABLE_KVMAP} SET ${COL_VALUE} = ? WHERE ${COL_KEY} = ?`,
+                [number, VAL_LAST_ID]
+            )
+        }
+
+        return number
+    })
+}
+
+// --- onRequest ---
+
+export async function onRequest(req, ctx) {
+    const limit = Number(req.getParam(REQ_LIMIT)) || 1
+
+    let handled = []
+    while (handled.length < limit) {
+        const id = await getNextId()
+        const item = await getFreescoutItem(id)
+        if (!item) continue // not found, skip
+
+        const theme = item.customFields?.find(f => f.id === 2)?.value
+        const app = item.customFields?.find(f => f.id === 1)?.value
+        if (theme && app) continue // already handled
+
+        ctx.pushRequest(CHECK_SCRIPT_NAME, CHECK_SCRIPT_VERSION, {
+            [CHECK_REQ_ID]: id
+        })
+        handled.push(id)
+    }
+
+    ctx.closeWithoutAnswer({ status: 'Done', handled })
+}

@@ -1,8 +1,11 @@
-import mysql from 'mysql2/promise'
 
-const GPT_SCRIPT_NAME = 'com.persapps.support.agent'
+const REQ_ID = 'a28q'
+const RES_OK = 'ylh1'
+const RES_REASON = 'gd3s'
+
+const GPT_SCRIPT_NAME = 'com.persapps.support.freescout.check.gpt'
 const GPT_SCRIPT_VERSION = '1.0.*'
-const GPT_REQ_MESSAGE = 'r1cb'
+const GPT_REQ_MESSAGE = 'n1jn'
 
 
 // --- freescout config ---
@@ -32,70 +35,10 @@ async function freescout(query) {
 }
 
 
-// --- database config ---
-
-const TABLE_HANDLED_ID = 'a2qf'
-
-const dbConfig = {
-    host: process.env.DB_HOST ?? 'localhost',
-    port: process.env.DB_PORT ?? 3306,
-    user: process.env.DB_USERNAME,
-    password: process.env.DB_PASSWORD,
-    database: process.env.DB_NAME,
-}
-
-async function database(block) {
-    const db = await mysql.createConnection(dbConfig)
-
-    try {
-        await db.beginTransaction()
-        const result = await block(db)
-        await db.commit()
-        return result
-    } catch (error) {
-        try {
-            await db.rollback()
-        } catch (_) {}
-        throw error
-    } finally {
-        await db.end()
-    }
-}
-
-
 // --- operations ---
-
-async function getFreescoutActiveIds() {
-    const data = await freescout('/api/conversations?status=active&page=1&pageSize=100')
-    const items = data?._embedded?.conversations ?? []
-
-    return items
-        .map(item => item?.id)
-        .filter(id => id !== undefined && id !== null)
-}
 
 async function getFreescoutItem(id) {
     return await freescout(`/api/conversations/${id}`)
-}
-
-async function tryRegisterId(id) {
-    return await database(async (db) => {
-        const [result] = await db.execute(
-            `INSERT IGNORE INTO ${TABLE_HANDLED_ID} (id) VALUES (?)`,
-            [id]
-        )
-
-        return result.affectedRows === 1
-    })
-}
-
-async function unregisterId(id) {
-    await database(async (db) => {
-        await db.execute(
-            `DELETE FROM ${TABLE_HANDLED_ID} WHERE id = ?`,
-            [id]
-        )
-    })
 }
 
 function stripHtml(input) {
@@ -156,36 +99,26 @@ function getMessage(item) {
 // --- onRequest ---
 
 export async function onRequest(req, ctx) {
-    const ids = await getFreescoutActiveIds()
+    const id = req.getParam(REQ_ID)
+    if (!id) throw new Error('ID parameter is required')
 
-    if (ids.length === 0) {
-        ctx.closeWithoutAnswer({ status: 'No active items found' })
+    const item = await getFreescoutItem(id)
+    if (!item) throw new Error(`Freescout item with ID ${id} not found`)
+    
+    const theme = item.customFields?.find(f => f.id === 2)?.value
+    const app = item.customFields?.find(f => f.id === 1)?.value
+
+    if (theme && app) {
+        ctx.close({ [RES_OK]: true, [RES_REASON]: 'Already handled' })
         return
     }
 
-    for (const id of ids) {
-        const registered = await tryRegisterId(id)
-        if (!registered) continue
+    const message = getMessage(item)
+    if (!message) throw new Error('Message content is empty')
 
-        try {
-            const item = await getFreescoutItem(id)
-            const message = getMessage(item)
-            if (!message) throw new Error('Message content is empty')
-
-            ctx.pushRequest(GPT_SCRIPT_NAME, GPT_SCRIPT_VERSION, {
-                [GPT_REQ_MESSAGE]: message
-            })
-            return
-        } catch (error) {
-            try {
-                await unregisterId(id)
-            } catch (_) {}
-
-            throw error
-        }
-    }
-
-    ctx.closeWithoutAnswer({ status: 'No new items' })
+    ctx.pushRequest(GPT_SCRIPT_NAME, GPT_SCRIPT_VERSION, {
+        [GPT_REQ_MESSAGE]: message
+    })
 }
 
 
@@ -194,7 +127,7 @@ export async function onRequest(req, ctx) {
 export async function onResponse(responses, req, ctx) {
 
     ctx.close({
-        ok: true,
+        [RES_OK]: true, [RES_REASON]: 'Handled',
         responses: responses,
     })
 }
