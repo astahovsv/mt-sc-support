@@ -100,9 +100,11 @@ function getMessage(item) {
         texts.push(stripHtml(thread.body))
     }
 
+    const limit = 800;
+    
     const fullText = texts.join('\n')
-    if (fullText.length > 1000) {
-        return fullText.slice(0, 1000) + '...'
+    if (fullText.length > limit) {
+        return fullText.slice(0, limit) + '...'
     }
 
     return fullText

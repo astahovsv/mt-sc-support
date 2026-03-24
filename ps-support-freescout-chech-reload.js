@@ -143,7 +143,7 @@ export async function onResponse(responses, req, ctx) {
     let error = responses[0]?.error
     if (responses[0]?.error) {
         ctx.closeWithoutAnswer({ status: 'Finish by error', error })
-        retrun
+        return
     }
 
     await sendNextItem(req, ctx)

@@ -56,11 +56,11 @@ const client = new OpenAI({
 
 // --- operations ---
 
-const VAL_RESPONSE_ID = 'openai_response_id'
-const VAL_PROMPT = 'openai_prompt'
+const VAL_RESPONSE_ID = 'response_id'
 const VAL_FIELDS = 'fields'
 const VAL_THEME = 'theme'
 const VAL_APP = 'app'
+const VAL_LAST_ANSWER = 'last_answer'
 
 async function getFreescoutFields(id) {
     const data = await freescout(`/api/mailboxes/1/custom_fields`)
@@ -97,6 +97,7 @@ ${fields[VAL_THEME].map(t => `- ${t.id}: '${t.name}'`).join('\n')}
 ${fields[VAL_APP].map(a => `- ${a.id}: '${a.name}'`).join('\n')}
 Правила:
 Выбирай одно значение из списка либо 0, если не можешь определить точно.
+Если сообщение не относится к службе поддержки то выбирай тему - 'Other'.
 Не добавляй пояснений или лишнего текста.
 Ответ должен быть строго в JSON формате.
 Формат ответа:
@@ -104,48 +105,110 @@ ${fields[VAL_APP].map(a => `- ${a.id}: '${a.name}'`).join('\n')}
   "theme": <индекст выбранного значения>,
   "app": <индекст выбранного значения>,
   "description": "<объяснение на русском языке, почему ты выбрал эти значения>",
-  "probability": <оценка от 0 до 10, насколько ты уверен в своем выборе>
+  "probability": <оценка от 0.0 до 1.0, насколько ты уверен в своем выборе>
 }`
 }
 
-function handleGPTResponse(ctx, fields, response, input) {
+function parseNumber(value, fieldName) {
 
-    const answer = JSON.parse(response.output_text)
-    const themeIndex = Number(answer.theme) || 0
-    const appIndex = Number(answer.app) || 0
+    if (typeof value === 'number') {
+        if (!Number.isInteger(value)) {
+            throw new Error(`Field "${fieldName}" must be integer`)
+        }
+        return value
+    }
+
+    if (typeof value === 'string') {
+        if (!/^\d+$/.test(value)) {
+            throw new Error(`Field "${fieldName}" must be numeric string`)
+        }
+        return Number(value)
+    }
+
+    throw new Error(`Field "${fieldName}" must be number`)
+}
+
+
+function parseAnswer(output_text, fields) {
+
+    const answer = JSON.parse(output_text)
+    if (typeof answer !== 'object' || answer === null) {
+        throw new Error('Invalid response: ' + output_text)
+    }
+
+    const themeIndex = parseNumber(answer.theme, 'theme')
+    const appIndex = parseNumber(answer.app, 'app')
 
     let theme = null
     if (themeIndex > 0) {
         theme = fields[VAL_THEME].find(t => Number(t.id) === themeIndex)
-        if (!theme) throw new Error('Invalid theme index in response: ' + response.output_text)
+        if (!theme) throw new Error('Invalid response: ' + output_text)
     }
 
     let app = null
     if (appIndex > 0) {
         app = fields[VAL_APP].find(a => Number(a.id) === appIndex)
-        if (!app) throw new Error('Invalid app index in response: ' + response.output_text)
+        if (!app) throw new Error('Invalid response:  ' + output_text)
     }
 
-    if (!theme || !app) {
+    if (!answer.description) {
+        throw new Error('Invalid response:  ' + output_text)
+    }
+
+    return { 
+        theme: theme, 
+        app: app, 
+        probability: Number(answer.probability) || 0, 
+        description: answer.description
+    }
+}
+
+async function handleGPTResponse(ctx, response, input) {
+
+    ctx.setValue(VAL_LAST_ANSWER, response.output_text)
+
+    const fields = ctx.getValue(VAL_FIELDS)
+    let answer = null
+
+    try {
+        answer = parseAnswer(response.output_text, fields)
+    } catch {
+        // Попробуем запросить корректный ответ
+        const response2 = await client.responses.create({
+            model: GPT_MODEL,
+            input: 'Внимательно посмотри на формат ответа и попробуй ещё раз!',
+            previous_response_id: response.id,
+        })
+        answer = parseAnswer(response2.output_text, fields)
+    }
+
+    if (!answer.theme || !answer.app) {
         ctx.close({
             [RES_SUCCESS]: false,
-            [RES_REASON]: 'Theme and applications are not defined.'
+            [RES_REASON]: 'Theme and applications are not defined, content: ' + response.output_text
         })
         return
     }
 
-    const description = answer.description || ''
-    const probability = Number(answer.probability) || 0
+    if (answer.probability >= 0.7) {
+        // Доверяем выбору бота
+        ctx.close({
+            [RES_SUCCESS]: true,
+            [RES_THEME_INDEX]: answer.theme?.id,
+            [RES_APP_INDEX]: answer.app?.id,
+        })
+        return
+    }
 
     ctx.setValue(VAL_RESPONSE_ID, response.id)
-    ctx.setValue(VAL_THEME, theme?.id)
-    ctx.setValue(VAL_APP, app?.id)
+    ctx.setValue(VAL_THEME, answer.theme?.id)
+    ctx.setValue(VAL_APP, answer.app?.id)
 
     ctx.pushRequest(CNF_SCRIPT_NAME, CNF_SCRIPT_VERSION, {
         [CNF_REQ_DOC_TYPE]: 'w7bg',
         [CNF_REQ_SOURCE]: input,
-        [CNF_REQ_ACTION]: `Theme => ${theme?.name}\nApp => ${app?.name}\nProbability => ${probability}`,
-        [CNF_REQ_DESCRIPTION]: description,
+        [CNF_REQ_ACTION]: `New properties:\nTheme => ${answer.theme?.name}\nApp => ${answer.app?.name}`,
+        [CNF_REQ_DESCRIPTION]: `Probability: ${answer.probability}\n${answer.description}`,
     })
 }
 
@@ -159,7 +222,6 @@ export async function onRequest(req, ctx) {
     ctx.setValue(VAL_FIELDS, fields)
 
     const prompt = createPrompt(fields)
-    ctx.setValue(VAL_PROMPT, prompt)
 
     const response = await client.responses.create({
         model: GPT_MODEL,
@@ -167,7 +229,7 @@ export async function onRequest(req, ctx) {
         input: message
     })
 
-    handleGPTResponse(ctx, fields, response, message)
+    handleGPTResponse(ctx, response, message)
 }
 
 
@@ -188,8 +250,8 @@ export async function onResponse(responses, req, ctx) {
         return
     }
 
-    const message = result[CNF_RES_MESSAGE]?.trim()
-    if (!message) {
+    const comment = result[CNF_RES_MESSAGE]?.trim()
+    if (!comment) {
         ctx.close({
             [RES_SUCCESS]: false,
             [RES_REASON]: 'Not confirmed.',
@@ -197,16 +259,14 @@ export async function onResponse(responses, req, ctx) {
         return
     }
 
-    const fields = ctx.getValue(VAL_FIELDS)
     const responseId = ctx.getValue(VAL_RESPONSE_ID)
-    const prompt = ctx.getValue(VAL_PROMPT)
+    const input = req.getParam(REQ_MESSAGE)
 
     const response = await client.responses.create({
         model: GPT_MODEL,
-        instructions: prompt,
+        input: comment,
         previous_response_id: responseId,
-        input: message
     })
 
-    handleGPTResponse(ctx, fields, response, req.getParam(REQ_MESSAGE))
+    handleGPTResponse(ctx, response, input)
 }

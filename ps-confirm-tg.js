@@ -23,13 +23,10 @@ const WAKE_UP_ANSWER_TAG = 's9jr'
 
 // --- telegram config ---
 
-const token = process.env.TELEGRAM_BOT_TOKEN
-if (!token) throw new Error('Missing TELEGRAM_BOT_TOKEN')
-
 const supportedChatIds = process.env.TELEGRAM_CHAT_IDS?.split(',').map(id => id.trim())
 
 async function telegram(method, payload) {
-    const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
+    const response = await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/${method}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(payload),
@@ -139,14 +136,14 @@ async function getAnyDocument(docType) {
 async function presentMessageForAll(text) {
     for (const chatId of supportedChatIds) {
         await telegram('sendMessage', {
-            chat_id: chatId, text: text
+            chat_id: chatId, text: text, parse_mode: 'HTML'
         })
     }
 }
 
 async function presentMessage(chatId, text) {
     await telegram('sendMessage', {
-        chat_id: chatId, text: text
+        chat_id: chatId, text: text, parse_mode: 'HTML'
     })
 }
 
@@ -158,19 +155,19 @@ async function presentDocument(chatId, doc) {
 
     let text = 
 `
-========== Title =============
+<b>========== Title =============</b>
 ${doc[COL_PREFIX]}-${doc[COL_NUMBER]} from ${docDate}
 ${doc[COL_TITLE]}
-========== Source ============
+<b>========== Source ============</b>
 ${doc[COL_SOURCE]}
-========== Action ============
+<b>========== Action ============</b>
 ${doc[COL_ACTION]}
-======== Description =========
+<b>======== Description =========</b>
 ${doc[COL_DESCRIPTION]}
 `
 
     const res = await telegram('sendMessage', {
-        chat_id: chatId, text: text, reply_markup: {
+        chat_id: chatId, text: text, parse_mode: 'HTML', reply_markup: {
             inline_keyboard: [[ confirmButtons, rejectButtons, replyButtons ]],
         }
     })
@@ -323,7 +320,7 @@ export async function onWebhook(req, ctx) {
 
             await setDocumentProcessed(doc.id, PROCESSED_CLOSED, null)
             await presentMessage(chatId, `Answer accepted: 'Reply'.`)
-            sendResponse(ctx, doc, true, text)
+            sendResponse(ctx, doc, false, text)
             ctx.closeWithoutAnswer({ status: `action: 'Reply'`, body: update })
         }
 
