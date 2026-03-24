@@ -1,6 +1,7 @@
 import OpenAI from "openai"
 
 const REQ_MESSAGE = 'n1jn'
+const REQ_SOURCE_URL = 'fa0x'
 const RES_SUCCESS = 'su2c'
 const RES_REASON = 'gd3s'
 const RES_THEME_INDEX = 'b3m4'
@@ -10,6 +11,7 @@ const CNF_SCRIPT_NAME = 'com.persapps.confirm'
 const CNF_SCRIPT_VERSION = '1.0.*'
 const CNF_REQ_DOC_TYPE = 'hn4a'
 const CNF_REQ_SOURCE = 'aid4'
+const CNF_REQ_SOURCE_URL = 'ez8b'
 const CNF_REQ_ACTION = 'b8om'
 const CNF_REQ_DESCRIPTION = 'e7kx'
 
@@ -163,7 +165,7 @@ function parseAnswer(output_text, fields) {
     }
 }
 
-async function handleGPTResponse(ctx, response, input) {
+async function handleGPTResponse(req, ctx, response) {
 
     ctx.setValue(VAL_LAST_ANSWER, response.output_text)
 
@@ -206,7 +208,8 @@ async function handleGPTResponse(ctx, response, input) {
 
     ctx.pushRequest(CNF_SCRIPT_NAME, CNF_SCRIPT_VERSION, {
         [CNF_REQ_DOC_TYPE]: 'w7bg',
-        [CNF_REQ_SOURCE]: input,
+        [CNF_REQ_SOURCE]: req.getParam(REQ_MESSAGE),
+        [CNF_REQ_SOURCE_URL]: req.getParam(REQ_SOURCE_URL),
         [CNF_REQ_ACTION]: `New properties:\nTheme => ${answer.theme?.name}\nApp => ${answer.app?.name}`,
         [CNF_REQ_DESCRIPTION]: `Probability: ${answer.probability}\n${answer.description}`,
     })
@@ -229,7 +232,7 @@ export async function onRequest(req, ctx) {
         input: message
     })
 
-    handleGPTResponse(ctx, response, message)
+    handleGPTResponse(req, ctx, response)
 }
 
 
@@ -260,13 +263,11 @@ export async function onResponse(responses, req, ctx) {
     }
 
     const responseId = ctx.getValue(VAL_RESPONSE_ID)
-    const input = req.getParam(REQ_MESSAGE)
-
     const response = await client.responses.create({
         model: GPT_MODEL,
         input: comment,
         previous_response_id: responseId,
     })
 
-    handleGPTResponse(ctx, response, input)
+    handleGPTResponse(req, ctx, response)
 }

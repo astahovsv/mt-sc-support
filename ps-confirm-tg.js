@@ -56,6 +56,7 @@ const COL_PREFIX = 'z6om'
 const COL_NUMBER = 'cg2y'
 const COL_TITLE = 'tob7'
 const COL_SOURCE = 'aid4'
+const COL_SOURCE_URL = 'ez8b'
 const COL_ACTION = 'b8om'
 const COL_DESCRIPTION = 'e7kx'
 const COL_CALLBACK_ID = 'q4lz'
@@ -67,16 +68,8 @@ const PROCESSED_PENDING = 0
 const PROCESSED_ACTIVE = 1
 const PROCESSED_CLOSED = 2
 
-const dbConfig = {
-    host: process.env.DB_HOST ?? 'localhost',
-    port: process.env.DB_PORT ?? 3306,
-    user: process.env.DB_USERNAME,
-    password: process.env.DB_PASSWORD,
-    database: process.env.DB_NAME
-}
-
 async function databaseBlock(block) {
-    const db = await mysql.createConnection(dbConfig)
+    const db = await mysql.createConnection(process.env.DB_CONNECTION)
 
     try {
         await db.beginTransaction()
@@ -147,6 +140,13 @@ async function presentMessage(chatId, text) {
     })
 }
 
+function escapeHtml(value = '') {
+    return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+}
+
 async function presentDocument(chatId, doc) {
 
     const docDate = new Date(doc[COL_DATE]).toLocaleString('en-US', {
@@ -159,11 +159,12 @@ async function presentDocument(chatId, doc) {
 ${doc[COL_PREFIX]}-${doc[COL_NUMBER]} from ${docDate}
 ${doc[COL_TITLE]}
 <b>========== Source ============</b>
-${doc[COL_SOURCE]}
+${doc[COL_SOURCE_URL]}
+${escapeHtml(doc[COL_SOURCE])}
 <b>========== Action ============</b>
-${doc[COL_ACTION]}
+${escapeHtml(doc[COL_ACTION])}
 <b>======== Description =========</b>
-${doc[COL_DESCRIPTION]}
+${escapeHtml(doc[COL_DESCRIPTION])}
 `
 
     const res = await telegram('sendMessage', {
@@ -231,15 +232,21 @@ export async function onWakeUp(tag, req, ctx) {
 
         const doc = await getDocumentById(docId)
         if (!doc) throw new Error(`Document with id ${docId} not found for wake-up tag ${tag}`)
+
+        const token = doc[COL_ACTIVE_TOKEN]
+        if (!token) {
+            ctx.closeWithoutAnswer({ status: `ok` })
+            return
+        } 
         
-        const [chatId, messageId] = doc[COL_ACTIVE_TOKEN].split(':')
-        if (messageId) {
-            await setDocumentProcessed(doc.id, PROCESSED_PENDING, null)
-            await removeMessage(chatId, messageId)
-            ctx.closeWithoutAnswer({ status: `timeout` })
-        } else {
+        const [chatId, messageId] = token.split(':')
+        if (!messageId) {
             ctx.closeWithoutAnswer({ status: `ok` })
         }
+
+        await setDocumentProcessed(doc.id, PROCESSED_PENDING, null)
+        await removeMessage(chatId, messageId)
+        ctx.closeWithoutAnswer({ status: `timeout` })
     } else {
         throw new Error(`Unsupported wake-up tag: ${wakeUpTag}`)
     }

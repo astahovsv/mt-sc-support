@@ -6,6 +6,7 @@ const RES_REASON = 'gd3s'
 const GPT_SCRIPT_NAME = 'com.persapps.support.freescout.check.gpt'
 const GPT_SCRIPT_VERSION = '1.0.*'
 const GPT_REQ_MESSAGE = 'n1jn'
+const GTP_REQ_SOURCE_URL = 'fa0x'
 const GTP_RES_SUCCESS = 'su2c'
 const GTP_RES_REASON = 'gd3s'
 const GTP_RES_THEME_INDEX = 'b3m4'
@@ -101,7 +102,7 @@ function getMessage(item) {
     }
 
     const limit = 800;
-    
+
     const fullText = texts.join('\n')
     if (fullText.length > limit) {
         return fullText.slice(0, limit) + '...'
@@ -142,8 +143,10 @@ export async function onRequest(req, ctx) {
 
     ctx.setValue(VAL_CONVERSATION_ID, item.id)
 
+    const sourceUrl = `${process.env.FREESCOUT_HOST}/conversation/${id}`
     ctx.pushRequest(GPT_SCRIPT_NAME, GPT_SCRIPT_VERSION, {
-        [GPT_REQ_MESSAGE]: message
+        [GPT_REQ_MESSAGE]: message,
+        [GTP_REQ_SOURCE_URL]: sourceUrl,
     })
 }
 

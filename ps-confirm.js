@@ -2,6 +2,7 @@ import mysql from 'mysql2/promise'
 
 const REQ_DOC_TYPE = 'hn4a'
 const REQ_SOURCE = 'aid4'
+const REQ_SOURCE_URL = 'ez8b'
 const REQ_ACTION = 'b8om'
 const REQ_DESCRIPTION = 'e7kx'
 
@@ -32,20 +33,13 @@ const COL_PREFIX = 'z6om'
 const COL_NUMBER = 'cg2y'
 const COL_TITLE = 'tob7'
 const COL_SOURCE = 'aid4'
+const COL_SOURCE_URL = 'ez8b'
 const COL_DESCRIPTION = 'e7kx'
 const COL_CALLBACK_ID = 'q4lz'
 const COL_ACTION = 'b8om'
 
-const dbConfig = {
-    host: process.env.DB_HOST ?? 'localhost',
-    port: process.env.DB_PORT ?? 3306,
-    user: process.env.DB_USERNAME,
-    password: process.env.DB_PASSWORD,
-    database: process.env.DB_NAME
-}
-
 async function databaseBlock(block) {
-    const db = await mysql.createConnection(dbConfig)
+    const db = await mysql.createConnection(process.env.DB_CONNECTION)
 
     try {
         await db.beginTransaction()
@@ -76,7 +70,7 @@ function getCurrentDateOnly() {
     return new Date().toISOString().slice(0, 10) // YYYY-MM-DD
 }
 
-async function createDocument(contextId, docData, source, action, description) {
+async function createDocument(contextId, docData, source, sourceUrl, action, description) {
 
     const period = getCurrentPeriod()
     const documentDate = getCurrentDateOnly()
@@ -106,10 +100,10 @@ async function createDocument(contextId, docData, source, action, description) {
 
         await db.execute(
             `
-            INSERT INTO ${TABLE_DOCS} (${COL_DATE}, ${COL_CATEGORY}, ${COL_PREFIX}, ${COL_NUMBER}, ${COL_TITLE}, ${COL_SOURCE}, ${COL_ACTION}, ${COL_DESCRIPTION}, ${COL_CALLBACK_ID})
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO ${TABLE_DOCS} (${COL_DATE}, ${COL_CATEGORY}, ${COL_PREFIX}, ${COL_NUMBER}, ${COL_TITLE}, ${COL_SOURCE}, ${COL_SOURCE_URL}, ${COL_ACTION}, ${COL_DESCRIPTION}, ${COL_CALLBACK_ID})
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `,
-            [documentDate, docData.category, docData.prefix, number, docData.title, source, action, description, contextId]
+            [documentDate, docData.category, docData.prefix, number, docData.title, source, sourceUrl, action, description, contextId]
         )
         
         return number
@@ -130,9 +124,10 @@ export async function onRequest(req, ctx) {
     const contextId = ctx.getContextID()
     const action = req.getParam(REQ_ACTION) ?? ''
     const source = req.getParam(REQ_SOURCE) ?? ''
+    const sourceUrl = req.getParam(REQ_SOURCE_URL) ?? ''
     const description = req.getParam(REQ_DESCRIPTION) ?? ''
 
-    await createDocument(contextId, docData, source, action, description)
+    await createDocument(contextId, docData, source, sourceUrl, action, description)
 
     ctx.pushRequest(TG_SCRIPT_NAME, TG_SCRIPT_VERSION, {
         [TG_REQ_DOC_CATEGORY]: docData.category,
