@@ -21,19 +21,24 @@ const CNF_RES_MESSAGE = 'n8q7'
 
 async function fetchJson(url, options = {}) {
     const res = await fetch(url, options)
+    if (!res.ok) return null
     const text = await res.text()
-    return res.ok ? JSON.parse(text) : null
+    return (text) ? JSON.parse(text) : null
 }
 
-async function freescout(query) {
-    const url = new URL(query, process.env.FREESCOUT_HOST)
+async function freescout(query, method = 'GET', body = undefined) {
+    const bodyString = (body) ? JSON.stringify(body) : undefined
+    console.log(`freescout => ${method} ${query}, ${bodyString}`)
 
+    const url = new URL(query, process.env.FREESCOUT_HOST)
     return await fetchJson(url.toString(), {
-        method: 'GET',
+        method,
         headers: {
             'X-FreeScout-API-Key': process.env.FREESCOUT_API_KEY,
+            "Content-Type": "application/json",
             'Accept': 'application/json',
         },
+        body: bodyString
     })
 }
 

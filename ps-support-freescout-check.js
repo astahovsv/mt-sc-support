@@ -16,8 +16,9 @@ const GTP_RES_APP_INDEX = 'a9k2'
 
 async function fetchJson(url, options = {}) {
     const res = await fetch(url, options)
+    if (!res.ok) return null
     const text = await res.text()
-    return res.ok ? JSON.parse(text) : null
+    return (text) ? JSON.parse(text) : null
 }
 
 async function freescout(query, method = 'GET', body = undefined) {

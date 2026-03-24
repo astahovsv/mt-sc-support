@@ -9,27 +9,26 @@ const CHECK_REQ_ID = 'a28q'
 
 // --- freescout config ---
 
-const FREESCOUT_HOST = process.env.FREESCOUT_HOST
-if (!FREESCOUT_HOST) throw new Error('Missing FREESCOUT_HOST')
-
-const FREESCOUT_API_KEY = process.env.FREESCOUT_API_KEY
-if (!FREESCOUT_API_KEY) throw new Error('Missing FREESCOUT_API_KEY')
-
 async function fetchJson(url, options = {}) {
     const res = await fetch(url, options)
+    if (!res.ok) return null
     const text = await res.text()
-    return res.ok ? JSON.parse(text) : null
+    return (text) ? JSON.parse(text) : null
 }
 
-async function freescout(query) {
-    const url = new URL(query, FREESCOUT_HOST)
+async function freescout(query, method = 'GET', body = undefined) {
+    const bodyString = (body) ? JSON.stringify(body) : undefined
+    console.log(`freescout => ${method} ${query}, ${bodyString}`)
 
+    const url = new URL(query, process.env.FREESCOUT_HOST)
     return await fetchJson(url.toString(), {
-        method: 'GET',
+        method,
         headers: {
-            'X-FreeScout-API-Key': FREESCOUT_API_KEY,
+            'X-FreeScout-API-Key': process.env.FREESCOUT_API_KEY,
+            "Content-Type": "application/json",
             'Accept': 'application/json',
         },
+        body: bodyString
     })
 }
 
