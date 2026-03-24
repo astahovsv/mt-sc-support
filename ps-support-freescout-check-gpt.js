@@ -56,6 +56,9 @@ const client = new OpenAI({
 
 // --- operations ---
 
+const VAL_RESPONSE_ID = 'openai_response_id'
+const VAL_PROMPT = 'openai_prompt'
+const VAL_FIELDS = 'fields'
 const VAL_THEME = 'theme'
 const VAL_APP = 'app'
 
@@ -105,22 +108,7 @@ ${fields[VAL_APP].map(a => `- ${a.id}: '${a.name}'`).join('\n')}
 }`
 }
 
-// --- onRequest ---
-
-export async function onRequest(req, ctx) {
-    const message = req.getParam(REQ_MESSAGE)
-    if (!message) throw new Error('Message parameter is required')
-
-    const fields = await getFreescoutFields()
-    const prompt = createPrompt(fields)
-
-    const response = await client.responses.create({
-        model: GPT_MODEL,
-        input: [
-            { role: "system", content: prompt },
-            { role: "user", content: message }
-        ]
-    })
+function handleGPTResponse(ctx, fields, response, input) {
 
     const answer = JSON.parse(response.output_text)
     const themeIndex = Number(answer.theme) || 0
@@ -149,15 +137,37 @@ export async function onRequest(req, ctx) {
     const description = answer.description || ''
     const probability = Number(answer.probability) || 0
 
+    ctx.setValue(VAL_RESPONSE_ID, response.id)
     ctx.setValue(VAL_THEME, theme?.id)
     ctx.setValue(VAL_APP, app?.id)
 
     ctx.pushRequest(CNF_SCRIPT_NAME, CNF_SCRIPT_VERSION, {
         [CNF_REQ_DOC_TYPE]: 'w7bg',
-        [CNF_REQ_SOURCE]: message,
+        [CNF_REQ_SOURCE]: input,
         [CNF_REQ_ACTION]: `Theme => ${theme?.name}\nApp => ${app?.name}\nProbability => ${probability}`,
         [CNF_REQ_DESCRIPTION]: description,
     })
+}
+
+// --- onRequest ---
+
+export async function onRequest(req, ctx) {
+    const message = req.getParam(REQ_MESSAGE)
+    if (!message) throw new Error('Message parameter is required')
+
+    const fields = await getFreescoutFields()
+    ctx.setValue(VAL_FIELDS, fields)
+
+    const prompt = createPrompt(fields)
+    ctx.setValue(VAL_PROMPT, prompt)
+
+    const response = await client.responses.create({
+        model: GPT_MODEL,
+        instructions: prompt,
+        input: message
+    })
+
+    handleGPTResponse(ctx, fields, response, message)
 }
 
 
@@ -175,10 +185,28 @@ export async function onResponse(responses, req, ctx) {
             [RES_THEME_INDEX]: ctx.getValue(VAL_THEME),
             [RES_APP_INDEX]: ctx.getValue(VAL_APP),
         })
-    } else {
+        return
+    }
+
+    const message = result[CNF_RES_MESSAGE]?.trim()
+    if (!message) {
         ctx.close({
             [RES_SUCCESS]: false,
             [RES_REASON]: 'Not confirmed.',
         })
-    }    
+        return
+    }
+
+    const fields = ctx.getValue(VAL_FIELDS)
+    const responseId = ctx.getValue(VAL_RESPONSE_ID)
+    const prompt = ctx.getValue(VAL_PROMPT)
+
+    const response = await client.responses.create({
+        model: GPT_MODEL,
+        instructions: prompt,
+        previous_response_id: responseId,
+        input: message
+    })
+
+    handleGPTResponse(ctx, fields, response, req.getParam(REQ_MESSAGE))
 }

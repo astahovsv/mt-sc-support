@@ -69,6 +69,8 @@ async function database(block) {
 
 // --- operations ---
 
+const VAL_HANDLED = 'handled'
+
 async function getFreescoutItem(id) {
     return await freescout(`/api/conversations/${id}`)
 }
@@ -99,16 +101,21 @@ function getNextId() {
     })
 }
 
-// --- onRequest ---
+async function sendNextItem(req, ctx) {
 
-export async function onRequest(req, ctx) {
     const limit = Number(req.getParam(REQ_LIMIT)) || 1
+    const handled = Number(ctx.getValue(VAL_HANDLED)) || 0
 
-    let handled = []
-    while (handled.length < limit) {
+    if (handled >= limit) {
+        ctx.closeWithoutAnswer({ status: 'Close by limit', limit })
+        return
+    }
+
+    while (true) {
+
         const id = await getNextId()
         const item = await getFreescoutItem(id)
-        if (!item) continue // not found, skip
+        if (!item) continue // not found, next
 
         const theme = item.customFields?.find(f => f.id === 2)?.value
         const app = item.customFields?.find(f => f.id === 1)?.value
@@ -117,8 +124,27 @@ export async function onRequest(req, ctx) {
         ctx.pushRequest(CHECK_SCRIPT_NAME, CHECK_SCRIPT_VERSION, {
             [CHECK_REQ_ID]: id
         })
-        handled.push(id)
+        ctx.setValue(VAL_HANDLED, handled + 1)
+        break
+    }
+}
+
+
+// --- onRequest ---
+
+export async function onRequest(req, ctx) {
+    await sendNextItem(req, ctx)
+}
+
+
+// --- onResponse ---
+
+export async function onResponse(responses, req, ctx) {
+    let error = responses[0]?.error
+    if (responses[0]?.error) {
+        ctx.closeWithoutAnswer({ status: 'Finish by error', error })
+        retrun
     }
 
-    ctx.closeWithoutAnswer({ status: 'Done', handled })
+    await sendNextItem(req, ctx)
 }
