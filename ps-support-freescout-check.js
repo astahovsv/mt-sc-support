@@ -1,20 +1,18 @@
 
 const REQ_ID = 'a28q'
-const RES_OK = 'ylh1'
+const RES_SUCCESS = 'su2c'
 const RES_REASON = 'gd3s'
 
 const GPT_SCRIPT_NAME = 'com.persapps.support.freescout.check.gpt'
 const GPT_SCRIPT_VERSION = '1.0.*'
 const GPT_REQ_MESSAGE = 'n1jn'
+const GTP_RES_SUCCESS = 'su2c'
+const GTP_RES_REASON = 'gd3s'
+const GTP_RES_THEME_INDEX = 'b3m4'
+const GTP_RES_APP_INDEX = 'a9k2'
 
 
-// --- freescout config ---
-
-const FREESCOUT_HOST = process.env.FREESCOUT_HOST
-if (!FREESCOUT_HOST) throw new Error('Missing FREESCOUT_HOST')
-
-const FREESCOUT_API_KEY = process.env.FREESCOUT_API_KEY
-if (!FREESCOUT_API_KEY) throw new Error('Missing FREESCOUT_API_KEY')
+// --- freescout ---
 
 async function fetchJson(url, options = {}) {
     const res = await fetch(url, options)
@@ -22,20 +20,29 @@ async function fetchJson(url, options = {}) {
     return res.ok ? JSON.parse(text) : null
 }
 
-async function freescout(query) {
-    const url = new URL(query, FREESCOUT_HOST)
+async function freescout(query, method = 'GET', body = undefined) {
+    const bodyString = (body) ? JSON.stringify(body) : undefined
+    console.log(`freescout => ${method} ${query}, ${bodyString}`)
 
+    const url = new URL(query, process.env.FREESCOUT_HOST)
     return await fetchJson(url.toString(), {
-        method: 'GET',
+        method,
         headers: {
-            'X-FreeScout-API-Key': FREESCOUT_API_KEY,
+            'X-FreeScout-API-Key': process.env.FREESCOUT_API_KEY,
+            "Content-Type": "application/json",
             'Accept': 'application/json',
         },
+        body: bodyString
     })
 }
 
+const FREESCOUT_THEME_INDEX = 2
+const FREESCOUT_APP_INDEX = 1
+
 
 // --- operations ---
+
+const VAL_CONVERSATION_ID = 'v0j7'
 
 async function getFreescoutItem(id) {
     return await freescout(`/api/conversations/${id}`)
@@ -100,6 +107,15 @@ function getMessage(item) {
     return fullText
 }
 
+async function setFreescoutField(id, themeIndex, appIndex) {
+
+    let customFields = []
+    if (themeIndex) customFields.push({ id: FREESCOUT_THEME_INDEX, value: themeIndex })
+    if (appIndex) customFields.push({ id: FREESCOUT_APP_INDEX, value: appIndex })
+
+    await freescout(`/api/conversations/${id}/custom_fields`, 'PUT', { customFields })
+}
+
 
 // --- onRequest ---
 
@@ -110,16 +126,18 @@ export async function onRequest(req, ctx) {
     const item = await getFreescoutItem(id)
     if (!item) throw new Error(`Freescout item with ID ${id} not found`)
     
-    const theme = item.customFields?.find(f => f.id === 2)?.value
-    const app = item.customFields?.find(f => f.id === 1)?.value
+    const theme = item.customFields?.find(f => f.id === FREESCOUT_THEME_INDEX)?.value
+    const app = item.customFields?.find(f => f.id === FREESCOUT_APP_INDEX)?.value
 
     if (theme && app) {
-        ctx.close({ [RES_OK]: true, [RES_REASON]: 'Already handled' })
+        ctx.close({ [RES_SUCCESS]: true, [RES_REASON]: 'Already handled' })
         return
     }
 
     const message = getMessage(item)
     if (!message) throw new Error('Message content is empty')
+
+    ctx.setValue(VAL_CONVERSATION_ID, item.id)
 
     ctx.pushRequest(GPT_SCRIPT_NAME, GPT_SCRIPT_VERSION, {
         [GPT_REQ_MESSAGE]: message
@@ -130,8 +148,22 @@ export async function onRequest(req, ctx) {
 // --- onResponse ---
 
 export async function onResponse(responses, req, ctx) {
-    const response = responses[0]
-    if (!response) throw new Error('No response received from GPT script')
+    const resultString = responses[0]?.result
+    if (!resultString) throw new Error('No response received from confirmation script')
+    const result = JSON.parse(resultString)
 
-    ctx.close(response.result)
+    if (!result[GTP_RES_SUCCESS]) {
+        ctx.close({
+            [RES_SUCCESS]: false,
+            [RES_REASON]: result[GTP_RES_REASON]
+        })
+        return
+    }
+
+    const id = ctx.getValue(VAL_CONVERSATION_ID)
+    await setFreescoutField(id, result[GTP_RES_THEME_INDEX], result[GTP_RES_APP_INDEX])
+
+    ctx.close({
+        [RES_SUCCESS]: true,
+    })
 }

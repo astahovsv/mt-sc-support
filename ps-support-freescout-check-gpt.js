@@ -1,23 +1,10 @@
-import OpenAI from "openai";
+import OpenAI from "openai"
 
 const REQ_MESSAGE = 'n1jn'
-const RES_THEME = 'b3m4'
-const RES_APP = 'a9k2'
-
-const THEMES = [
-    { id: 1, name: 'Application error' },
-    { id: 2, name: 'Question about the application' },
-    { id: 3, name: 'Suggestion of new feature' },
-    { id: 0, name: 'Other' }
-]
-const APPLICATIONS = [
-    { id: 1, name: 'MultiTimer (iOS)' },
-    { id: 2, name: 'MultiTimer (macOS)' },
-    { id: 3, name: 'MultiTimer (Android)' },
-    { id: 4, name: 'Reminder' },
-    { id: 5, name: 'iSmartMMS' },
-    { id: 0, name: 'Other' }
-]
+const RES_SUCCESS = 'su2c'
+const RES_REASON = 'gd3s'
+const RES_THEME_INDEX = 'b3m4'
+const RES_APP_INDEX = 'a9k2'
 
 const CNF_SCRIPT_NAME = 'com.persapps.confirm'
 const CNF_SCRIPT_VERSION = '1.0.*'
@@ -30,68 +17,140 @@ const CNF_RES_AGREE = 'me6w'
 const CNF_RES_MESSAGE = 'n8q7'
 
 
-// --- openai config ---
+// --- freescout ---
+
+async function fetchJson(url, options = {}) {
+    const res = await fetch(url, options)
+    const text = await res.text()
+    return res.ok ? JSON.parse(text) : null
+}
+
+async function freescout(query) {
+    const url = new URL(query, process.env.FREESCOUT_HOST)
+
+    return await fetchJson(url.toString(), {
+        method: 'GET',
+        headers: {
+            'X-FreeScout-API-Key': process.env.FREESCOUT_API_KEY,
+            'Accept': 'application/json',
+        },
+    })
+}
+
+const FREESCOUT_THEME_INDEX = 2
+const FREESCOUT_APP_INDEX = 1
+
+// --- openai ---
 
 const GPT_MODEL = 'gpt-5-nano'
 
-const GPT_PROMPT = `Ты — агент службы поддержки и первый, кто обрабатывает входящие сообщения от пользователей.
+const client = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+})
+
+
+// --- operations ---
+
+const VAL_THEME = 'theme'
+const VAL_APP = 'app'
+
+async function getFreescoutFields(id) {
+    const data = await freescout(`/api/mailboxes/1/custom_fields`)
+    if (!data) throw new Error('Invalid response from FreeScout API')
+    
+    let fields = {}
+    for (const item of data._embedded?.custom_fields || []) {
+        let values = []
+        for (const key in item.options) {
+            values.push({ id: key, name: item.options[key] })
+        }
+        if (item.id === FREESCOUT_THEME_INDEX) { // Type of request
+            fields[VAL_THEME] = values
+        } else if (item.id === FREESCOUT_APP_INDEX) { // Application
+            fields[VAL_APP] = values
+        }
+    }
+
+    if (!fields[VAL_THEME] || !fields[VAL_APP]) {
+        throw new Error('Required parameters not found in FreeScout response')
+    }
+    
+    return fields
+}
+
+function createPrompt(fields) {
+    return `Ты — агент службы поддержки и первый, кто обрабатывает входящие сообщения от пользователей.
 Твоя задача — проанализировать текст сообщения и определить:
 - Тип запроса (theme)
 - Приложение, к которому он относится (app)
 Возможные значения theme:
-${THEMES.map(t => `- ${t.id}: '${t.name}'`).join('\n')}
+${fields[VAL_THEME].map(t => `- ${t.id}: '${t.name}'`).join('\n')}
 Возможные значения app:
-${APPLICATIONS.map(a => `- ${a.id}: '${a.name}'`).join('\n')}
+${fields[VAL_APP].map(a => `- ${a.id}: '${a.name}'`).join('\n')}
 Правила:
-Выбирай только одно значение из каждого списка
-Если невозможно точно определить — выбирай 'Other'
-Не добавляй пояснений или лишнего текста
-Ответ должен быть строго в JSON формате
+Выбирай одно значение из списка либо 0, если не можешь определить точно.
+Не добавляй пояснений или лишнего текста.
+Ответ должен быть строго в JSON формате.
 Формат ответа:
 {
-  "theme": "<индекст выбранного значения>",
-  "app": "<индекст выбранного значения>",
+  "theme": <индекст выбранного значения>,
+  "app": <индекст выбранного значения>,
   "description": "<объяснение на русском языке, почему ты выбрал эти значения>",
-  "probability": "<оценка от 0 до 10, насколько ты уверен в своем выборе>"
+  "probability": <оценка от 0 до 10, насколько ты уверен в своем выборе>
 }`
-
-const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
-
+}
 
 // --- onRequest ---
-
-const VAL_THEME = 'theme'
-const VAL_APP = 'app'
 
 export async function onRequest(req, ctx) {
     const message = req.getParam(REQ_MESSAGE)
     if (!message) throw new Error('Message parameter is required')
 
+    const fields = await getFreescoutFields()
+    const prompt = createPrompt(fields)
+
     const response = await client.responses.create({
         model: GPT_MODEL,
         input: [
-            { role: "system", content: GPT_PROMPT },
+            { role: "system", content: prompt },
             { role: "user", content: message }
         ]
     })
 
     const answer = JSON.parse(response.output_text)
-    const theme = THEMES.find(t => t.id.toString() === answer.theme)
-    if (!theme) throw new Error('Invalid theme index in response: ' + response.output_text)
-    const app = APPLICATIONS.find(a => a.id.toString() === answer.app)
-    if (!app) throw new Error('Invalid app index in response: ' + response.output_text)
+    const themeIndex = Number(answer.theme) || 0
+    const appIndex = Number(answer.app) || 0
+
+    let theme = null
+    if (themeIndex > 0) {
+        theme = fields[VAL_THEME].find(t => Number(t.id) === themeIndex)
+        if (!theme) throw new Error('Invalid theme index in response: ' + response.output_text)
+    }
+
+    let app = null
+    if (appIndex > 0) {
+        app = fields[VAL_APP].find(a => Number(a.id) === appIndex)
+        if (!app) throw new Error('Invalid app index in response: ' + response.output_text)
+    }
+
+    if (!theme || !app) {
+        ctx.close({
+            [RES_SUCCESS]: false,
+            [RES_REASON]: 'Theme and applications are not defined.'
+        })
+        return
+    }
+
     const description = answer.description || ''
     const probability = Number(answer.probability) || 0
 
-    ctx.setValue(VAL_THEME, theme.id)
-    ctx.setValue(VAL_APP, app.id)
+    ctx.setValue(VAL_THEME, theme?.id)
+    ctx.setValue(VAL_APP, app?.id)
 
     ctx.pushRequest(CNF_SCRIPT_NAME, CNF_SCRIPT_VERSION, {
         [CNF_REQ_DOC_TYPE]: 'w7bg',
         [CNF_REQ_SOURCE]: message,
-        [CNF_REQ_ACTION]: `Theme => ${theme.name}\nApp => ${app.name}\nProbability => ${probability}`,
+        [CNF_REQ_ACTION]: `Theme => ${theme?.name}\nApp => ${app?.name}\nProbability => ${probability}`,
         [CNF_REQ_DESCRIPTION]: description,
     })
 }
@@ -100,20 +159,21 @@ export async function onRequest(req, ctx) {
 // --- onResponse ---
 
 export async function onResponse(responses, req, ctx) {
-    const response = responses[0]
-    if (!response) throw new Error('No response received from confirmation script')
-    
-    const result = JSON.parse(response.result)
+    const resultString = responses[0]?.result
+    if (!resultString) throw new Error('No response received from confirmation script')
+    const result = JSON.parse(resultString)
 
     const egree = result[CNF_RES_AGREE]
     if (egree) {
         ctx.close({
-            [RES_THEME]: ctx.getValue(VAL_THEME),
-            [RES_APP]: ctx.getValue(VAL_APP),
+            [RES_SUCCESS]: true,
+            [RES_THEME_INDEX]: ctx.getValue(VAL_THEME),
+            [RES_APP_INDEX]: ctx.getValue(VAL_APP),
         })
     } else {
         ctx.close({
-            'message': result[CNF_RES_MESSAGE],
+            [RES_SUCCESS]: false,
+            [RES_REASON]: 'Not confirmed.',
         })
     }    
 }
