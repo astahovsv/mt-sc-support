@@ -7,16 +7,20 @@ const RES_REASON = 'gd3s'
 const RES_THEME_INDEX = 'b3m4'
 const RES_APP_INDEX = 'a9k2'
 
-const CNF_SCRIPT_NAME = 'com.persapps.confirm'
-const CNF_SCRIPT_VERSION = '1.0.*'
-const CNF_REQ_DOC_TYPE = 'hn4a'
-const CNF_REQ_SOURCE = 'aid4'
-const CNF_REQ_SOURCE_URL = 'ez8b'
-const CNF_REQ_ACTION = 'b8om'
-const CNF_REQ_DESCRIPTION = 'e7kx'
+const APR_SCRIPT_NAME = 'com.persapps.approval'
+const APR_SCRIPT_VERSION = '1.0.*'
+const APR_REQ_TYPE = 'hn4a' // тип запроса
+const APR_REQ_ACTION = 'b8om' // выполняемое действие
+const APR_REQ_REASON = 'e7kx' // причина, объяснение
+// const APR_REQ_DATA = 'bk3f' // данные для выполнения
+const APR_REQ_SOURCES = 'r3jv' // ресурсы на основе которых или с которыми будут эти действия выполняться
+const APR_RES_ANSWER = 'h8vg'
+const APR_RES_COMMENT = 'uj8m'
 
-const CNF_RES_AGREE = 'me6w'
-const CNF_RES_MESSAGE = 'n8q7'
+const APR_ANSWER_ACCEPTED = 'j7cf'
+const APR_ANSWER_REJECTED = 'co9g'
+const APR_ANSWER_COMMENT = 'l5jo'
+const APR_ANSWER_REVISE = 'ko3x'
 
 
 // --- freescout ---
@@ -47,6 +51,7 @@ async function freescout(query, method = 'GET', body = undefined) {
 const FREESCOUT_THEME_INDEX = 2
 const FREESCOUT_APP_INDEX = 1
 
+
 // --- openai ---
 
 const GPT_MODEL = 'gpt-5-nano'
@@ -58,11 +63,9 @@ const client = new OpenAI({
 
 // --- operations ---
 
-const VAL_RESPONSE_ID = 'response_id'
 const VAL_FIELDS = 'fields'
 const VAL_THEME = 'theme'
 const VAL_APP = 'app'
-const VAL_LAST_ANSWER = 'last_answer'
 
 async function getFreescoutFields(id) {
     const data = await freescout(`/api/mailboxes/1/custom_fields`)
@@ -89,26 +92,55 @@ async function getFreescoutFields(id) {
 }
 
 function createPrompt(fields) {
-    return `Ты — агент службы поддержки и первый, кто обрабатывает входящие сообщения от пользователей.
-Твоя задача — проанализировать текст сообщения и определить:
-- Тип запроса (theme)
-- Приложение, к которому он относится (app)
-Возможные значения theme:
+    return `You are a classification engine for customer support messages.
+
+Your task is to analyze the provided customer message and determine:
+- theme
+- app
+
+Available theme values:
 ${fields[VAL_THEME].map(t => `- ${t.id}: '${t.name}'`).join('\n')}
-Возможные значения app:
+
+Available app values:
 ${fields[VAL_APP].map(a => `- ${a.id}: '${a.name}'`).join('\n')}
-Правила:
-Выбирай одно значение из списка либо 0, если не можешь определить точно.
-Если сообщение не относится к службе поддержки то выбирай тему - 'Other'.
-Не добавляй пояснений или лишнего текста.
-Ответ должен быть строго в JSON формате.
-Формат ответа:
+
+Rules:
+- Return only one theme id and one app id.
+- Return only numeric ids.
+- If the message is not related to customer support, select theme 'Other'.
+- If the theme or app cannot be determined confidently, choose the most appropriate available option.
+- Do not answer the customer.
+- Do not suggest actions.
+- Do not ask follow-up questions.
+- description must explain the classification decision in Russian.
+- probability must be a number from 0.0 to 1.0.
+- Return ONLY valid JSON with no extra text.
+
+Response format:
 {
-  "theme": <индекст выбранного значения>,
-  "app": <индекст выбранного значения>,
-  "description": "<объяснение на русском языке, почему ты выбрал эти значения>",
-  "probability": <оценка от 0.0 до 1.0, насколько ты уверен в своем выборе>
+  "theme": <number>,
+  "app": <number>,
+  "description": "<Russian explanation>",
+  "probability": <number>
 }`
+}
+
+function prepareComment(comment) {
+    return `REVIEW COMMENT:
+\`\`\`
+${comment}
+\`\`\`
+
+Re-evaluate the classification from scratch.
+
+Priority rules:
+1. The review comment has higher priority than the previous classification.
+2. If the review comment explicitly requests a different theme or app, you MUST apply it.
+3. Do not answer the customer.
+4. Do not continue the conversation.
+5. Produce only the final classification result.
+
+Return ONLY valid JSON in the required format.`
 }
 
 function parseNumber(value, fieldName) {
@@ -130,31 +162,32 @@ function parseNumber(value, fieldName) {
     throw new Error(`Field "${fieldName}" must be number`)
 }
 
+function parseAnswer(ctx, output) {
 
-function parseAnswer(output_text, fields) {
-
-    const answer = JSON.parse(output_text)
+    const answer = JSON.parse(output)
     if (typeof answer !== 'object' || answer === null) {
-        throw new Error('Invalid response: ' + output_text)
+        throw new Error('Invalid response: ' + output)
     }
 
     const themeIndex = parseNumber(answer.theme, 'theme')
     const appIndex = parseNumber(answer.app, 'app')
 
+    const fields = ctx.getValue(VAL_FIELDS)
+
     let theme = null
     if (themeIndex > 0) {
         theme = fields[VAL_THEME].find(t => Number(t.id) === themeIndex)
-        if (!theme) throw new Error('Invalid response: ' + output_text)
+        if (!theme) throw new Error('Invalid response: ' + output)
     }
 
     let app = null
     if (appIndex > 0) {
         app = fields[VAL_APP].find(a => Number(a.id) === appIndex)
-        if (!app) throw new Error('Invalid response:  ' + output_text)
+        if (!app) throw new Error('Invalid response:  ' + output)
     }
 
     if (!answer.description) {
-        throw new Error('Invalid response:  ' + output_text)
+        throw new Error('Invalid response:  ' + output)
     }
 
     return { 
@@ -165,29 +198,82 @@ function parseAnswer(output_text, fields) {
     }
 }
 
-async function handleGPTResponse(req, ctx, response) {
+const VAL_LAST_OUTPUT = 'last_output'
+const VAL_LAST_RESPONSE_ID = 'last_response_id'
 
-    ctx.setValue(VAL_LAST_ANSWER, response.output_text)
+async function performAIRequest(ctx, message) {
 
-    const fields = ctx.getValue(VAL_FIELDS)
-    let answer = null
+    let response = null
 
-    try {
-        answer = parseAnswer(response.output_text, fields)
-    } catch {
-        // Попробуем запросить корректный ответ
-        const response2 = await client.responses.create({
+    const previous_response_id = ctx.getValue(VAL_LAST_RESPONSE_ID)
+    if (previous_response_id) {
+         // Продолжение беседы
+        response = await client.responses.create({
             model: GPT_MODEL,
-            input: 'Внимательно посмотри на формат ответа и попробуй ещё раз!',
-            previous_response_id: response.id,
+            input: message,
+            previous_response_id,
         })
-        answer = parseAnswer(response2.output_text, fields)
+    } else {
+         // Новая беседа
+        const fields = ctx.getValue(VAL_FIELDS)
+        const prompt = createPrompt(fields)
+        response = await client.responses.create({
+            model: GPT_MODEL,
+            instructions: prompt,
+            input: message
+        })
     }
 
-    if (!answer.theme || !answer.app) {
+    // Для продолжения беседы
+    ctx.setValue(VAL_LAST_RESPONSE_ID, response.id)
+    // Для аналитики
+    ctx.setValue(VAL_LAST_OUTPUT, response.output_text)
+
+    return response.output_text
+}
+
+function sendConfirmRequest(req, ctx, answer) {
+
+    // Пригодится при получении ответов
+    ctx.setValue(VAL_THEME, answer.theme?.id)
+    ctx.setValue(VAL_APP, answer.app?.id)
+
+    ctx.pushRequest(APR_SCRIPT_NAME, APR_SCRIPT_VERSION, {
+        [APR_REQ_TYPE]: 'w7bg',
+        [APR_REQ_ACTION]: `New properties:\nTheme => ${answer.theme?.name}\nApp => ${answer.app?.name}`,
+        [APR_REQ_REASON]: `Probability: ${answer.probability}\n${answer.description}`,
+        [APR_REQ_SOURCES]: [
+            req.getParam(REQ_SOURCE_URL),
+            req.getParam(REQ_MESSAGE),
+        ]
+    })
+}
+
+
+// --- onRequest ---
+
+export async function onRequest(req, ctx) {
+    const message = req.getParam(REQ_MESSAGE)
+    if (!message) throw new Error('Message parameter is required')
+
+    const fields = await getFreescoutFields()
+    ctx.setValue(VAL_FIELDS, fields)
+
+    let answer = null
+    try {
+        const output = await performAIRequest(ctx, message)
+        answer = parseAnswer(ctx, output)
+    } catch {
+        // Попробуем ещё раз
+        ctx.setValue(VAL_LAST_RESPONSE_ID, null)
+        const output = await performAIRequest(ctx, message)
+        answer = parseAnswer(ctx, output)
+    }
+
+    if (!answer.theme && !answer.app) {
         ctx.close({
             [RES_SUCCESS]: false,
-            [RES_REASON]: 'Theme and applications are not defined, content: ' + response.output_text
+            [RES_REASON]: 'Theme and applications are not defined, content: ' + ctx.getValue(VAL_LAST_OUTPUT)
         })
         return
     }
@@ -202,37 +288,7 @@ async function handleGPTResponse(req, ctx, response) {
         return
     }
 
-    ctx.setValue(VAL_RESPONSE_ID, response.id)
-    ctx.setValue(VAL_THEME, answer.theme?.id)
-    ctx.setValue(VAL_APP, answer.app?.id)
-
-    ctx.pushRequest(CNF_SCRIPT_NAME, CNF_SCRIPT_VERSION, {
-        [CNF_REQ_DOC_TYPE]: 'w7bg',
-        [CNF_REQ_SOURCE]: req.getParam(REQ_MESSAGE),
-        [CNF_REQ_SOURCE_URL]: req.getParam(REQ_SOURCE_URL),
-        [CNF_REQ_ACTION]: `New properties:\nTheme => ${answer.theme?.name}\nApp => ${answer.app?.name}`,
-        [CNF_REQ_DESCRIPTION]: `Probability: ${answer.probability}\n${answer.description}`,
-    })
-}
-
-// --- onRequest ---
-
-export async function onRequest(req, ctx) {
-    const message = req.getParam(REQ_MESSAGE)
-    if (!message) throw new Error('Message parameter is required')
-
-    const fields = await getFreescoutFields()
-    ctx.setValue(VAL_FIELDS, fields)
-
-    const prompt = createPrompt(fields)
-
-    const response = await client.responses.create({
-        model: GPT_MODEL,
-        instructions: prompt,
-        input: message
-    })
-
-    handleGPTResponse(req, ctx, response)
+    sendConfirmRequest(req, ctx, answer)
 }
 
 
@@ -243,31 +299,75 @@ export async function onResponse(responses, req, ctx) {
     if (!resultString) throw new Error('No response received from confirmation script')
     const result = JSON.parse(resultString)
 
-    const egree = result[CNF_RES_AGREE]
-    if (egree) {
+    const cnfAnswer = result[APR_RES_ANSWER]
+    if (cnfAnswer === APR_ANSWER_ACCEPTED) {
+        // Получено согласие
         ctx.close({
             [RES_SUCCESS]: true,
             [RES_THEME_INDEX]: ctx.getValue(VAL_THEME),
             [RES_APP_INDEX]: ctx.getValue(VAL_APP),
         })
-        return
-    }
+    } 
+    else if (cnfAnswer === APR_ANSWER_COMMENT) {
+        // Получен комментарий
 
-    const comment = result[CNF_RES_MESSAGE]?.trim()
-    if (!comment) {
+        const comment = result[APR_RES_COMMENT]?.trim()
+        if (!comment) {
+            ctx.close({
+                [RES_SUCCESS]: false,
+                [RES_REASON]: 'Not confirmed.',
+            })
+            return
+        }
+
+        let answer = null
+        try {
+            const message = prepareComment(comment)
+            const output = await performAIRequest(ctx, message)
+            answer = parseAnswer(ctx, output)
+        } catch {
+            // Попробуем ещё раз
+            ctx.setValue(VAL_LAST_RESPONSE_ID, null)
+            const message = `${req.getParam(REQ_MESSAGE)}\n\n${comment}`
+            const output = await performAIRequest(ctx, message)
+            answer = parseAnswer(ctx, output)
+        }
+
+        if (!answer.theme && !answer.app) {
+            ctx.close({
+                [RES_SUCCESS]: false,
+                [RES_REASON]: 'Theme and applications are not defined, content: ' + ctx.getValue(VAL_LAST_OUTPUT)
+            })
+            return
+        }
+
+        sendConfirmRequest(req, ctx, answer)
+    } 
+    else if (cnfAnswer === APR_ANSWER_REVISE) {
+        // Получен запрос на доработку
+
+        ctx.setValue(VAL_LAST_RESPONSE_ID, null)
+        const output = await performAIRequest(ctx, req.getParam(REQ_MESSAGE))
+        const answer = parseAnswer(ctx, output)
+        
+        if (!answer.theme || !answer.app) {
+            ctx.close({
+                [RES_SUCCESS]: false,
+                [RES_REASON]: 'Theme and applications are not defined, content: ' + ctx.getValue(VAL_LAST_OUTPUT)
+            })
+            return
+        }
+
+        sendConfirmRequest(req, ctx, answer)
+    }
+    else if (cnfAnswer === APR_ANSWER_REJECTED) {
+        // Получен отказ
         ctx.close({
             [RES_SUCCESS]: false,
-            [RES_REASON]: 'Not confirmed.',
+            [RES_REASON]: 'Reject.',
         })
-        return
     }
-
-    const responseId = ctx.getValue(VAL_RESPONSE_ID)
-    const response = await client.responses.create({
-        model: GPT_MODEL,
-        input: comment,
-        previous_response_id: responseId,
-    })
-
-    handleGPTResponse(req, ctx, response)
+    else {
+        throw new Error(`Unsupported answer: ${cnfAnswer}`)
+    }
 }

@@ -46,8 +46,34 @@ const FREESCOUT_APP_INDEX = 1
 
 const VAL_CONVERSATION_ID = 'v0j7'
 
+async function retry(fn, attempts = 0, delay = 0) {
+    let lastError
+
+    for (let i = 0; i <= attempts; i++) {
+        try {
+            return await fn()
+        } catch (err) {
+            lastError = err
+
+            // если это последняя попытка — пробрасываем ошибку
+            if (i === attempts) {
+                throw lastError
+            }
+
+            // пауза перед следующей попыткой
+            if (delay > 0) {
+                await new Promise(res => setTimeout(res, delay))
+            }
+        }
+    }
+}
+
 async function getFreescoutItem(id) {
-    return await freescout(`/api/conversations/${id}`)
+    return await retry(async () => {
+        const item = await freescout(`/api/conversations/${id}`)
+        if (!item) throw new Error(`Freescout item with ID ${id} not found`)
+        return item
+    }, 2, 100) // + 2 попытки, 100 мсек между ними
 }
 
 function stripHtml(input) {
@@ -127,9 +153,7 @@ export async function onRequest(req, ctx) {
     const id = req.getParam(REQ_ID)
     if (!id) throw new Error('ID parameter is required')
 
-    const item = await getFreescoutItem(id)
-    if (!item) throw new Error(`Freescout item with ID ${id} not found`)
-    
+    const item = await getFreescoutItem(id)    
     const theme = item.customFields?.find(f => f.id === FREESCOUT_THEME_INDEX)?.value
     const app = item.customFields?.find(f => f.id === FREESCOUT_APP_INDEX)?.value
 
