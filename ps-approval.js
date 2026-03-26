@@ -6,12 +6,17 @@ const REQ_REASON = 'e7kx' // причина, объяснение
 const REQ_DATA = 'bk3f' // данные для выполнения
 const REQ_SOURCES = 'r3jv' // ресурсы на основе которых или с которыми будут эти действия выполняться
 
+const LOGIC_SCRIPT_NAME = 'com.persapps.approval.logic'
+const LOGIC_SCRIPT_VERSION = '1.0.*'
+
 const TG_SCRIPT_NAME = 'com.persapps.approval.tg'
 const TG_SCRIPT_VERSION = '1.0.*'
-const TG_REQ_DOC_ID = 'bj3a' // Идентификатор заявки
-const TG_REQ_CALLBACK_ID = 'y2eb' // Идентификатор контекста для возврата ответа
-const TG_RES_ANSWER = 'h8vg'
-const TG_RES_COMMENT = 'uj8m'
+
+const APR_REQ_DOC_ID = 'bj3a' // Идентификатор заявки
+const APR_REQ_CALLBACK_ID = 'y2eb' // Идентификатор контекста для возврата ответа
+const APR_RES_SUCCESS = 'su2c'
+const APR_RES_ANSWER = 'h8vg'
+const APR_RES_COMMENT = 'uj8m'
 
 
 // --- database config ---
@@ -24,7 +29,7 @@ const COL_ACTION = 'lm6t'
 const COL_REASON = 'v0pf'
 const COL_DATA = 'c2w1'
 const COL_SOURCES = 'h5uy'
-const COL_DECISION_ANSWER = 'ni0c'
+const COL_DECISION_VALUE = 'ni0c'
 const COL_DECISION_COMMENT = 'g6fr'
 
 async function database(block) {
@@ -64,13 +69,39 @@ async function createDocument(sender, type, action, reason, data, sources) {
     })
 }
 
-async function updateAnswer(docId, answer, comment) {
+async function applyDecision(ctx, decision) {
+
+    const docId = ctx.getValue(VAL_DOC_ID)
+    const answer = decision[APR_RES_ANSWER]
+    if (!answer) throw new Error(`Missing '${APR_RES_ANSWER}' response parameter`)
+    const comment = decision[APR_RES_COMMENT]
+
     await database(async (db) => {
         await db.execute(
-            `UPDATE ${TABLE_REQ} SET ${COL_DECISION_ANSWER} = ?, ${COL_DECISION_COMMENT} = ? WHERE id = ?`,
+            `UPDATE ${TABLE_REQ} SET ${COL_DECISION_VALUE} = ?, ${COL_DECISION_COMMENT} = ? WHERE id = ?`,
             [answer, (comment ? comment : 'NULL'), docId]
         )
     })
+}
+
+async function handleLogicDecision(ctx, decision) {
+
+    const success = decision[APR_RES_SUCCESS]
+    if (success) {
+        await applyDecision(ctx, decision)
+        ctx.close(decision)
+    } else {
+        // Отправим запрос в телеграмм
+        ctx.pushRequest(TG_SCRIPT_NAME, TG_SCRIPT_VERSION, {
+            [APR_REQ_DOC_ID]: ctx.getValue(VAL_DOC_ID),
+            [APR_REQ_CALLBACK_ID]: ctx.getContextID()
+        })
+    }
+}
+
+async function handleUserDecision(ctx, decision) {
+    await applyDecision(ctx, decision)
+    ctx.close(decision)
 }
 
 
@@ -92,23 +123,21 @@ export async function onRequest(req, ctx) {
     const docId = await createDocument(sender, type, action, reason, data, sources)
     ctx.setValue(VAL_DOC_ID, docId)
 
-    ctx.pushRequest(TG_SCRIPT_NAME, TG_SCRIPT_VERSION, {
-        [TG_REQ_DOC_ID]: docId,
-        [TG_REQ_CALLBACK_ID]: ctx.getContextID()
-    })
+    ctx.pushRequest(LOGIC_SCRIPT_NAME, LOGIC_SCRIPT_VERSION, {
+        [APR_REQ_DOC_ID]: docId,
+    }, 'logic')
 }
 
 export async function onResponse(responses, req, ctx) {
-    const resultString = responses[0]?.result
+    const response = responses[0]
+
+    const resultString = response.result
     if (!resultString) throw new Error('No response result')
     const result = JSON.parse(resultString)
 
-    const answer = result[TG_RES_ANSWER]
-    if (!answer) throw new Error(`Missing '${TG_RES_ANSWER}' response parameter`)
-    const comment = result[TG_RES_COMMENT]
-
-    const docId = ctx.getValue(VAL_DOC_ID)
-    await updateAnswer(docId, answer, comment)
-
-    ctx.close(result)
+    if (response.tag === 'logic') {
+        await handleLogicDecision(ctx, result)
+    } else {
+        await handleUserDecision(ctx, result)
+    }
 }

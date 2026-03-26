@@ -2,7 +2,6 @@ import mysql from 'mysql2/promise'
 
 const REQ_DOC_ID = 'bj3a' // Идентификатор заявки
 const REQ_CALLBACK_ID = 'y2eb' // Идентификатор контекста для возврата ответа
-const RES_DOC_ID = 'bk3s'
 const RES_ANSWER = 'h8vg'
 const RES_COMMENT = 'uj8m'
 
@@ -195,7 +194,6 @@ async function removeMessage(chatId, messageId) {
 
 function sendResponse(ctx, process, answer, comment) {
     ctx.pushResponse(process[COL_CALLBACK_ID], null, {
-        [RES_DOC_ID]: process[COL_DOC_ID],
         [RES_ANSWER]: answer,
         [RES_COMMENT]: comment,
     })

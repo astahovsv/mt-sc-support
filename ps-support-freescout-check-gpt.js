@@ -7,13 +7,17 @@ const RES_REASON = 'gd3s'
 const RES_THEME_INDEX = 'b3m4'
 const RES_APP_INDEX = 'a9k2'
 
+const RES_DATA_TYPE = 'cf5d'
+const RES_DATA_APP = 'cj0z'
+const RES_DATA_PROBABILITY = 'x0dk'
+
 const APR_SCRIPT_NAME = 'com.persapps.approval'
 const APR_SCRIPT_VERSION = '1.0.*'
 const APR_REQ_TYPE = 'hn4a' // тип запроса
 const APR_REQ_ACTION = 'b8om' // выполняемое действие
 const APR_REQ_REASON = 'e7kx' // причина, объяснение
-// const APR_REQ_DATA = 'bk3f' // данные для выполнения
 const APR_REQ_SOURCES = 'r3jv' // ресурсы на основе которых или с которыми будут эти действия выполняться
+const APR_REQ_DATA = 'bk3f' // данные для выполнения
 const APR_RES_ANSWER = 'h8vg'
 const APR_RES_COMMENT = 'uj8m'
 
@@ -203,6 +207,8 @@ const VAL_LAST_RESPONSE_ID = 'last_response_id'
 
 async function performAIRequest(ctx, message) {
 
+    console.log(`Start gpt request (id: ${ctx.getContextID()})`)
+
     let response = null
 
     const previous_response_id = ctx.getValue(VAL_LAST_RESPONSE_ID)
@@ -229,6 +235,8 @@ async function performAIRequest(ctx, message) {
     // Для аналитики
     ctx.setValue(VAL_LAST_OUTPUT, response.output_text)
 
+    console.log(`Finish gpt request (id: ${ctx.getContextID()})`)
+
     return response.output_text
 }
 
@@ -245,7 +253,12 @@ function sendConfirmRequest(req, ctx, answer) {
         [APR_REQ_SOURCES]: [
             req.getParam(REQ_SOURCE_URL),
             req.getParam(REQ_MESSAGE),
-        ]
+        ],
+        [APR_REQ_DATA]: {
+            [RES_DATA_PROBABILITY]: answer.probability,
+            [RES_DATA_TYPE]: answer.theme?.id,
+            [RES_DATA_APP]: answer.app?.id,
+        }
     })
 }
 
@@ -274,16 +287,6 @@ export async function onRequest(req, ctx) {
         ctx.close({
             [RES_SUCCESS]: false,
             [RES_REASON]: 'Theme and applications are not defined, content: ' + ctx.getValue(VAL_LAST_OUTPUT)
-        })
-        return
-    }
-
-    if (answer.probability >= 0.7) {
-        // Доверяем выбору бота
-        ctx.close({
-            [RES_SUCCESS]: true,
-            [RES_THEME_INDEX]: answer.theme?.id,
-            [RES_APP_INDEX]: answer.app?.id,
         })
         return
     }
