@@ -38,7 +38,7 @@ const ACTION_CANCEL = 'c8s9'
 
 const acceptButtons = { text: 'Accept', callback_data: ACTION_ACCEPT }
 const rejectButtons = { text: 'Reject', callback_data: ACTION_REJECT }
-const reviceButtons = { text: 'Revice', callback_data: ACTION_REVISE }
+const reviseButtons = { text: 'Revise', callback_data: ACTION_REVISE }
 
 
 // --- database config ---
@@ -170,7 +170,7 @@ ${escapeHtml(JSON.parse(doc[COL_SOURCES]).join('\n'))}
 
     const res = await telegram('sendMessage', {
         chat_id: chatId, text: text, parse_mode: 'HTML', reply_markup: {
-            inline_keyboard: [[ acceptButtons, rejectButtons, reviceButtons ]],
+            inline_keyboard: [[ acceptButtons, rejectButtons, reviseButtons ]],
         }
     })
 
@@ -292,9 +292,9 @@ export async function onWebhook(req, ctx) {
         }
         else if (action === ACTION_REVISE) {
             await updateProcess(process[COL_DOC_ID], PROCESSED_CLOSED)
-            await presentMessage(chatId, `Answer accepted: 'Revice'.`)
+            await presentMessage(chatId, `Answer accepted: 'Revise'.`)
             sendResponse(ctx, process, ANSWER_REVISE)
-            ctx.closeWithoutAnswer({ status: `action: 'Revice'`, body: update})
+            ctx.closeWithoutAnswer({ status: `action: 'Revise'`, body: update})
         }
         else if (action === ACTION_CANCEL) {
             await updateProcess(process[COL_DOC_ID], PROCESSED_CLOSED)

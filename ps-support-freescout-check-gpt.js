@@ -38,7 +38,6 @@ async function fetchJson(url, options = {}) {
 
 async function freescout(query, method = 'GET', body = undefined) {
     const bodyString = (body) ? JSON.stringify(body) : undefined
-    console.log(`freescout => ${method} ${query}, ${bodyString}`)
 
     const url = new URL(query, process.env.FREESCOUT_HOST)
     return await fetchJson(url.toString(), {
@@ -111,7 +110,6 @@ ${fields[VAL_APP].map(a => `- ${a.id}: '${a.name}'`).join('\n')}
 Rules:
 - Return only one theme id and one app id.
 - Return only numeric ids.
-- If the message is not related to customer support, select theme 'Other'.
 - If the theme or app cannot be determined confidently, choose the most appropriate available option.
 - Do not answer the customer.
 - Do not suggest actions.
@@ -166,7 +164,7 @@ function parseNumber(value, fieldName) {
     throw new Error(`Field "${fieldName}" must be number`)
 }
 
-function parseAnswer(ctx, output) {
+function parseAIAnswer(ctx, output) {
 
     const answer = JSON.parse(output)
     if (typeof answer !== 'object' || answer === null) {
@@ -178,17 +176,11 @@ function parseAnswer(ctx, output) {
 
     const fields = ctx.getValue(VAL_FIELDS)
 
-    let theme = null
-    if (themeIndex > 0) {
-        theme = fields[VAL_THEME].find(t => Number(t.id) === themeIndex)
-        if (!theme) throw new Error('Invalid response: ' + output)
-    }
+    const theme = fields[VAL_THEME].find(t => Number(t.id) === themeIndex)
+    if (!theme) throw new Error('Invalid response: ' + output)
 
-    let app = null
-    if (appIndex > 0) {
-        app = fields[VAL_APP].find(a => Number(a.id) === appIndex)
-        if (!app) throw new Error('Invalid response:  ' + output)
-    }
+    const app = fields[VAL_APP].find(a => Number(a.id) === appIndex)
+    if (!app) throw new Error('Invalid response:  ' + output)
 
     if (!answer.description) {
         throw new Error('Invalid response:  ' + output)
@@ -206,9 +198,6 @@ const VAL_LAST_OUTPUT = 'last_output'
 const VAL_LAST_RESPONSE_ID = 'last_response_id'
 
 async function performAIRequest(ctx, message) {
-
-    console.log(`Start gpt request (id: ${ctx.getContextID()})`)
-
     let response = null
 
     const previous_response_id = ctx.getValue(VAL_LAST_RESPONSE_ID)
@@ -235,20 +224,18 @@ async function performAIRequest(ctx, message) {
     // Для аналитики
     ctx.setValue(VAL_LAST_OUTPUT, response.output_text)
 
-    console.log(`Finish gpt request (id: ${ctx.getContextID()})`)
-
     return response.output_text
 }
 
 function sendConfirmRequest(req, ctx, answer) {
 
     // Пригодится при получении ответов
-    ctx.setValue(VAL_THEME, answer.theme?.id)
-    ctx.setValue(VAL_APP, answer.app?.id)
+    ctx.setValue(VAL_THEME, answer.theme.id)
+    ctx.setValue(VAL_APP, answer.app.id)
 
     ctx.pushRequest(APR_SCRIPT_NAME, APR_SCRIPT_VERSION, {
         [APR_REQ_TYPE]: 'w7bg',
-        [APR_REQ_ACTION]: `New properties:\nTheme => ${answer.theme?.name}\nApp => ${answer.app?.name}`,
+        [APR_REQ_ACTION]: `New properties:\nTheme => ${answer.theme.name}\nApp => ${answer.app.name}`,
         [APR_REQ_REASON]: `Probability: ${answer.probability}\n${answer.description}`,
         [APR_REQ_SOURCES]: [
             req.getParam(REQ_SOURCE_URL),
@@ -256,8 +243,8 @@ function sendConfirmRequest(req, ctx, answer) {
         ],
         [APR_REQ_DATA]: {
             [RES_DATA_PROBABILITY]: answer.probability,
-            [RES_DATA_TYPE]: answer.theme?.id,
-            [RES_DATA_APP]: answer.app?.id,
+            [RES_DATA_TYPE]: answer.theme.id,
+            [RES_DATA_APP]: answer.app.id,
         }
     })
 }
@@ -275,20 +262,12 @@ export async function onRequest(req, ctx) {
     let answer = null
     try {
         const output = await performAIRequest(ctx, message)
-        answer = parseAnswer(ctx, output)
+        answer = parseAIAnswer(ctx, output)
     } catch {
         // Попробуем ещё раз
         ctx.setValue(VAL_LAST_RESPONSE_ID, null)
         const output = await performAIRequest(ctx, message)
-        answer = parseAnswer(ctx, output)
-    }
-
-    if (!answer.theme && !answer.app) {
-        ctx.close({
-            [RES_SUCCESS]: false,
-            [RES_REASON]: 'Theme and applications are not defined, content: ' + ctx.getValue(VAL_LAST_OUTPUT)
-        })
-        return
+        answer = parseAIAnswer(ctx, output)
     }
 
     sendConfirmRequest(req, ctx, answer)
@@ -327,21 +306,13 @@ export async function onResponse(responses, req, ctx) {
         try {
             const message = prepareComment(comment)
             const output = await performAIRequest(ctx, message)
-            answer = parseAnswer(ctx, output)
+            answer = parseAIAnswer(ctx, output)
         } catch {
             // Попробуем ещё раз
             ctx.setValue(VAL_LAST_RESPONSE_ID, null)
             const message = `${req.getParam(REQ_MESSAGE)}\n\n${comment}`
             const output = await performAIRequest(ctx, message)
-            answer = parseAnswer(ctx, output)
-        }
-
-        if (!answer.theme && !answer.app) {
-            ctx.close({
-                [RES_SUCCESS]: false,
-                [RES_REASON]: 'Theme and applications are not defined, content: ' + ctx.getValue(VAL_LAST_OUTPUT)
-            })
-            return
+            answer = parseAIAnswer(ctx, output)
         }
 
         sendConfirmRequest(req, ctx, answer)
@@ -351,7 +322,7 @@ export async function onResponse(responses, req, ctx) {
 
         ctx.setValue(VAL_LAST_RESPONSE_ID, null)
         const output = await performAIRequest(ctx, req.getParam(REQ_MESSAGE))
-        const answer = parseAnswer(ctx, output)
+        const answer = parseAIAnswer(ctx, output)
         
         if (!answer.theme || !answer.app) {
             ctx.close({
