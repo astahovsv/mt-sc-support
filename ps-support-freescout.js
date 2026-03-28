@@ -131,8 +131,8 @@ function getMessage(item) {
         }
     }
 
-    for (let i = threads.length - 1; i >= 0; i--) {
-        const thread = threads[i]
+    threads.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
+    for (const thread of threads) {
         if (!thread.body) continue
 
         texts.push('')
