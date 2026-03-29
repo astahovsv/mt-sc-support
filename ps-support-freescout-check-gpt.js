@@ -255,30 +255,37 @@ function sendConfirmRequest(req, ctx, answer) {
 // --- onRequest ---
 
 export async function onRequest(req, ctx) {
+    console.log(`onRequest:1: start`)
     const message = req.getParam(REQ_MESSAGE)
     if (!message) throw new Error('Message parameter is required')
 
+    console.log(`onRequest:2: getFreescoutFields()`)
     const fields = await getFreescoutFields()
     ctx.setValue(VAL_FIELDS, fields)
 
     let answer = null
     try {
+        console.log(`onRequest:3: performAIRequest()`)
         const output = await performAIRequest(ctx, message)
         answer = parseAIAnswer(ctx, output)
     } catch {
         // Попробуем ещё раз
+        console.log(`onRequest:4: performAIRequest()`)
         ctx.setValue(VAL_LAST_RESPONSE_ID, null)
         const output = await performAIRequest(ctx, message)
         answer = parseAIAnswer(ctx, output)
     }
 
+    console.log(`onRequest:5: sendConfirmRequest()`)
     sendConfirmRequest(req, ctx, answer)
+    console.log(`onRequest:6: finish`)
 }
 
 
 // --- onResponse ---
 
 export async function onResponse(responses, req, ctx) {
+    console.log(`onResponse:1: start`)
     const resultString = responses[0]?.result
     if (!resultString) throw new Error('No response received from confirmation script')
     const result = JSON.parse(resultString)
@@ -286,6 +293,7 @@ export async function onResponse(responses, req, ctx) {
     const cnfAnswer = result[APR_RES_ANSWER]
     if (cnfAnswer === APR_ANSWER_ACCEPTED) {
         // Получено согласие
+        console.log(`onResponse:2: close()`)
         ctx.close({
             [RES_SUCCESS]: true,
             [RES_THEME_INDEX]: ctx.getValue(VAL_THEME),
@@ -297,6 +305,7 @@ export async function onResponse(responses, req, ctx) {
 
         const comment = result[APR_RES_COMMENT]?.trim()
         if (!comment) {
+            console.log(`onResponse:3: close()`)
             ctx.close({
                 [RES_SUCCESS]: false,
                 [RES_REASON]: 'Not confirmed.',
@@ -306,27 +315,32 @@ export async function onResponse(responses, req, ctx) {
 
         let answer = null
         try {
+            console.log(`onResponse:4: performAIRequest()`)
             const message = prepareComment(comment)
             const output = await performAIRequest(ctx, message)
             answer = parseAIAnswer(ctx, output)
         } catch {
             // Попробуем ещё раз
+            console.log(`onResponse:5: performAIRequest()`)
             ctx.setValue(VAL_LAST_RESPONSE_ID, null)
             const message = `${req.getParam(REQ_MESSAGE)}\n\n${comment}`
             const output = await performAIRequest(ctx, message)
             answer = parseAIAnswer(ctx, output)
         }
 
+        console.log(`onResponse:6: sendConfirmRequest()`)
         sendConfirmRequest(req, ctx, answer)
     } 
     else if (cnfAnswer === APR_ANSWER_REVISE) {
         // Получен запрос на доработку
 
         ctx.setValue(VAL_LAST_RESPONSE_ID, null)
+        console.log(`onResponse:7: performAIRequest()`)
         const output = await performAIRequest(ctx, req.getParam(REQ_MESSAGE))
         const answer = parseAIAnswer(ctx, output)
         
         if (!answer.theme || !answer.app) {
+            console.log(`onResponse:8: close()`)
             ctx.close({
                 [RES_SUCCESS]: false,
                 [RES_REASON]: 'Theme and applications are not defined, content: ' + ctx.getValue(VAL_LAST_OUTPUT)
@@ -334,10 +348,12 @@ export async function onResponse(responses, req, ctx) {
             return
         }
 
+        console.log(`onResponse:9: sendConfirmRequest()`)
         sendConfirmRequest(req, ctx, answer)
     }
     else if (cnfAnswer === APR_ANSWER_REJECTED) {
         // Получен отказ
+        console.log(`onResponse:10: close()`)
         ctx.close({
             [RES_SUCCESS]: false,
             [RES_REASON]: 'Reject.',
@@ -346,4 +362,5 @@ export async function onResponse(responses, req, ctx) {
     else {
         throw new Error(`Unsupported answer: ${cnfAnswer}`)
     }
+    console.log(`onResponse:11: finish`)
 }

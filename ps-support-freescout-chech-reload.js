@@ -1,6 +1,7 @@
-import mysql from 'mysql2/promise'
 
+const REQ_START = 'm5cr'
 const REQ_LIMIT = 'jv6n'
+const RES_SUCCESS = 'su2c'
 
 const CHECK_SCRIPT_NAME = 'com.persapps.support.freescout.check'
 const CHECK_SCRIPT_VERSION = '1.0.*'
@@ -33,91 +34,44 @@ async function freescout(query, method = 'GET', body = undefined) {
 }
 
 
-// --- database config ---
-
-const TABLE_KVMAP = 'e3kt'
-const COL_KEY = 'name'
-const COL_VALUE = 'value'
-const VAL_LAST_ID = 'd1hu'
-
-async function database(block) {
-    const db = await mysql.createConnection(process.env.DB_CONNECTION)
-
-    try {
-        await db.beginTransaction()
-        const result = await block(db)
-        await db.commit()
-        return result
-    } catch (error) {
-        try {
-            await db.rollback()
-        } catch (_) {}
-        throw error
-    } finally {
-        await db.end()
-    }
-}
-
-
 // --- operations ---
 
+const VAL_INDEX = 'index'
 const VAL_HANDLED = 'handled'
 
 async function getFreescoutItem(id) {
     return await freescout(`/api/conversations/${id}`)
 }
 
-function getNextId() {
-    return database(async (db) => {
-        const [rows] = await db.execute(
-            `SELECT ${COL_VALUE} FROM ${TABLE_KVMAP} WHERE ${COL_KEY} = ?`,
-            [VAL_LAST_ID]
-        )
-
-        let number
-        if (rows.length === 0) {
-            number = 1
-            await db.execute(
-                `INSERT INTO ${TABLE_KVMAP} (${COL_KEY}, ${COL_VALUE}) VALUES (?, ?)`,
-                [VAL_LAST_ID, number]
-            )
-        } else {
-            number = Number(rows[0][COL_VALUE]) + 1
-            await db.execute(
-                `UPDATE ${TABLE_KVMAP} SET ${COL_VALUE} = ? WHERE ${COL_KEY} = ?`,
-                [number, VAL_LAST_ID]
-            )
-        }
-
-        return number
-    })
-}
-
-async function sendNextItem(req, ctx) {
-
+async function next(req, ctx) {
     const limit = Number(req.getParam(REQ_LIMIT)) || 1
-    const handled = Number(ctx.getValue(VAL_HANDLED)) || 0
-
-    if (handled >= limit) {
-        ctx.closeWithoutAnswer({ status: 'Close by limit', limit })
-        return
-    }
-
     while (true) {
 
-        const id = await getNextId()
-        const item = await getFreescoutItem(id)
-        if (!item) continue // not found, next
+        const handled = Number(ctx.getValue(VAL_HANDLED)) || 0
+        if (handled >= limit) {
+            ctx.close({ [RES_SUCCESS]: true, status: 'Close by limit', limit })
+            return
+        }
 
-        const theme = item.customFields?.find(f => f.id === 2)?.value
-        const app = item.customFields?.find(f => f.id === 1)?.value
-        if (theme && app) continue // already handled
+        const nextIndex = (Number(ctx.getValue(VAL_INDEX)) || 0)
+        const item = await getFreescoutItem(nextIndex)
+        if (!item) {
+            ctx.close({ [RES_SUCCESS]: false, status: 'Close by error', error: `Item with id ${nextIndex} not found` })
+            return
+        }
 
-        ctx.pushRequest(CHECK_SCRIPT_NAME, CHECK_SCRIPT_VERSION, {
-            [CHECK_REQ_ID]: id
-        })
         ctx.setValue(VAL_HANDLED, handled + 1)
-        break
+        ctx.setValue(VAL_INDEX, nextIndex + 1)
+
+        const fields = item.customFields ?? []
+        const filled = fields.filter(f => f.value)
+        
+        if (filled.length < fields.length) {
+            ctx.pushRequest(CHECK_SCRIPT_NAME, CHECK_SCRIPT_VERSION, {
+                [CHECK_REQ_ID]: nextIndex
+            })
+            break
+        }
     }
 }
 
@@ -125,18 +79,23 @@ async function sendNextItem(req, ctx) {
 // --- onRequest ---
 
 export async function onRequest(req, ctx) {
-    await sendNextItem(req, ctx)
+    const start = req.getParam(REQ_START)
+    if (!start) throw new Error(`${REQ_START} parameter is required`)
+
+    ctx.setValue(VAL_INDEX, Number(start))
+
+    await next(req, ctx)
 }
 
 
 // --- onResponse ---
 
 export async function onResponse(responses, req, ctx) {
-    let error = responses[0]?.error
-    if (responses[0]?.error) {
-        ctx.closeWithoutAnswer({ status: 'Finish by error', error })
+    const error = responses[0]?.error
+    if (error) {
+        ctx.close({ [RES_SUCCESS]: false, status: 'Close by error', error })
         return
     }
 
-    await sendNextItem(req, ctx)
+    await next(req, ctx)
 }
