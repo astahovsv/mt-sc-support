@@ -7,7 +7,7 @@ const RES_ANSWER = 'h8vg'
 const ANSWER_ACCEPTED = 'j7cf'
 const ANSWER_REJECTED = 'co9g'
 
-const VAL_DATA_PROBABILITY = 'x0dk'
+const VAL_DATA_CONFIDENCE = 'x0dk'
 
 // --- database config ---
 
@@ -65,7 +65,7 @@ export async function onRequest(req, ctx) {
 
         const data = JSON.parse(dataString)
 
-        if (data[VAL_DATA_PROBABILITY] < 0.7) {
+        if (data[VAL_DATA_CONFIDENCE] < 0.65) {
             ctx.close({ [RES_SUCCESS]: false })
             return
         }

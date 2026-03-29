@@ -9,7 +9,7 @@ const RES_APP_INDEX = 'a9k2'
 
 const RES_DATA_TYPE = 'cf5d'
 const RES_DATA_APP = 'cj0z'
-const RES_DATA_PROBABILITY = 'x0dk'
+const RES_DATA_CONFIDENCE = 'x0dk'
 
 const APR_SCRIPT_NAME = 'com.persapps.approval'
 const APR_SCRIPT_VERSION = '1.0.*'
@@ -101,29 +101,30 @@ Your task is to analyze the provided customer message and determine:
 - theme
 - app
 
-Available theme values:
-${fields[VAL_THEME].map(t => `- ${t.id}: '${t.name}'`).join('\n')}
+Available theme values (you MUST return one of these exact strings):
+${fields[VAL_THEME].map(t => `- '${t.name}'`).join('\n')}
 
-Available app values:
-${fields[VAL_APP].map(a => `- ${a.id}: '${a.name}'`).join('\n')}
+Available app values (you MUST return one of these exact strings):
+${fields[VAL_APP].map(a => `- '${a.name}'`).join('\n')}
 
 Rules:
-- Return only one theme id and one app id.
-- Return only numeric ids.
-- If the theme or app cannot be determined confidently, choose the most appropriate available option.
+- Return exactly one theme and one app.
+- Values MUST be exact matches from the lists above (no variations, no synonyms).
+- If the theme or app cannot be determined confidently, choose the most appropriate option from the list.
+- If the message contains only general feedback without a clear question, bug report, or feature suggestion, classify it as 'Other'.
 - Do not answer the customer.
 - Do not suggest actions.
 - Do not ask follow-up questions.
-- description must explain the classification decision in Russian.
-- probability must be a number from 0.0 to 1.0.
+- Description must explain the classification decision in Russian.
+- Confidence must be your subjective confidence that the classification is correct, from 0.0 to 1.0.
 - Return ONLY valid JSON with no extra text.
 
 Response format:
 {
-  "theme": <number>,
-  "app": <number>,
+  "theme": "<exact theme string>",
+  "app": "<exact app string>",
   "description": "<Russian explanation>",
-  "probability": <number>
+  "confidence": <number from 0.0 to 1.0>
 }`
 }
 
@@ -136,11 +137,11 @@ ${comment}
 Re-evaluate the classification from scratch.
 
 Priority rules:
-1. The review comment has higher priority than the previous classification.
-2. If the review comment explicitly requests a different theme or app, you MUST apply it.
-3. Do not answer the customer.
-4. Do not continue the conversation.
-5. Produce only the final classification result.
+- The review comment MUST be taken into account when performing classification.
+- Returned values MUST exactly match one of the allowed options (no free text).
+- Do not answer the customer.
+- Do not continue the conversation.
+- Produce only the final classification result.
 
 Return ONLY valid JSON in the required format.`
 }
@@ -171,25 +172,26 @@ function parseAIAnswer(ctx, output) {
         throw new Error('Invalid response: ' + output)
     }
 
-    const themeIndex = parseNumber(answer.theme, 'theme')
-    const appIndex = parseNumber(answer.app, 'app')
-
     const fields = ctx.getValue(VAL_FIELDS)
 
-    const theme = fields[VAL_THEME].find(t => Number(t.id) === themeIndex)
+    const themeValue = answer.theme
+    if (!themeValue) throw new Error('Missed theme in response: ' + output)
+    const theme = fields[VAL_THEME].find(t => t.name.toLowerCase() === themeValue.toLowerCase())
     if (!theme) throw new Error('Invalid response: ' + output)
 
-    const app = fields[VAL_APP].find(a => Number(a.id) === appIndex)
+    const appValue = answer.app
+    if (!appValue) throw new Error('Missed app in response: ' + output)
+    const app = fields[VAL_APP].find(a => a.name.toLowerCase() === appValue.toLowerCase())
     if (!app) throw new Error('Invalid response:  ' + output)
 
     if (!answer.description) {
-        throw new Error('Invalid response:  ' + output)
+        throw new Error('Missed description in response:  ' + output)
     }
 
     return { 
         theme: theme, 
         app: app, 
-        probability: Number(answer.probability) || 0, 
+        confidence: Number(answer.confidence) || 0, 
         description: answer.description
     }
 }
@@ -236,13 +238,13 @@ function sendConfirmRequest(req, ctx, answer) {
     ctx.pushRequest(APR_SCRIPT_NAME, APR_SCRIPT_VERSION, {
         [APR_REQ_TYPE]: 'w7bg',
         [APR_REQ_ACTION]: `New properties:\nTheme => ${answer.theme.name}\nApp => ${answer.app.name}`,
-        [APR_REQ_REASON]: `Probability: ${answer.probability}\n${answer.description}`,
+        [APR_REQ_REASON]: `Уверенность: ${answer.confidence}\n${answer.description}`,
         [APR_REQ_SOURCES]: [
             req.getParam(REQ_SOURCE_URL),
             req.getParam(REQ_MESSAGE),
         ],
         [APR_REQ_DATA]: {
-            [RES_DATA_PROBABILITY]: answer.probability,
+            [RES_DATA_CONFIDENCE]: answer.confidence,
             [RES_DATA_TYPE]: answer.theme.id,
             [RES_DATA_APP]: answer.app.id,
         }
