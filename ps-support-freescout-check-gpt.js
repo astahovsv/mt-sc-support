@@ -33,18 +33,18 @@ async function fetchJson(url, options = {}) {
     const res = await fetch(url, options)
     if (!res.ok) return null
     const text = await res.text()
-    return (text) ? JSON.parse(text) : null
+    return text ? JSON.parse(text) : null
 }
 
 async function freescout(query, method = 'GET', body = undefined) {
-    const bodyString = (body) ? JSON.stringify(body) : undefined
+    const bodyString = body ? JSON.stringify(body) : undefined
 
     const url = new URL(query, process.env.FREESCOUT_HOST)
     return await fetchJson(url.toString(), {
         method,
         headers: {
             'X-FreeScout-API-Key': process.env.FREESCOUT_API_KEY,
-            "Content-Type": "application/json",
+            'Content-Type': 'application/json',
             'Accept': 'application/json',
         },
         body: bodyString
@@ -60,34 +60,44 @@ const FREESCOUT_APP_INDEX = 1
 const GPT_MODEL = 'gpt-5-nano'
 
 const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+    apiKey: process.env.OPENAI_API_KEY,
 })
 
 
-// --- operations ---
+// --- constants ---
 
 const VAL_FIELDS = 'fields'
 const VAL_THEME = 'theme'
 const VAL_APP = 'app'
+const VAL_LAST_OUTPUT = 'last_output'
+const VAL_HISTORY = 'history'
 
-async function getFreescoutFields(id) {
+const FIELD_THEME = 'theme'
+const FIELD_APP = 'app'
+
+
+// --- operations ---
+
+async function getFreescoutFields() {
     const data = await freescout(`/api/mailboxes/1/custom_fields`)
     if (!data) throw new Error('Invalid response from FreeScout API')
     
-    let fields = {}
+    const fields = {}
+
     for (const item of data._embedded?.custom_fields || []) {
-        let values = []
+        const values = []
         for (const key in item.options) {
             values.push({ id: key, name: item.options[key] })
         }
-        if (item.id === FREESCOUT_THEME_INDEX) { // Type of request
-            fields[VAL_THEME] = values
-        } else if (item.id === FREESCOUT_APP_INDEX) { // Application
-            fields[VAL_APP] = values
+
+        if (item.id === FREESCOUT_THEME_INDEX) {
+            fields[FIELD_THEME] = values
+        } else if (item.id === FREESCOUT_APP_INDEX) {
+            fields[FIELD_APP] = values
         }
     }
 
-    if (!fields[VAL_THEME] || !fields[VAL_APP]) {
+    if (!fields[FIELD_THEME] || !fields[FIELD_APP]) {
         throw new Error('Required parameters not found in FreeScout response')
     }
     
@@ -102,10 +112,10 @@ Your task is to analyze the provided customer message and determine:
 - app
 
 Available theme values (you MUST return one of these exact strings):
-${fields[VAL_THEME].map(t => `- '${t.name}'`).join('\n')}
+${fields[FIELD_THEME].map(t => `- '${t.name}'`).join('\n')}
 
 Available app values (you MUST return one of these exact strings):
-${fields[VAL_APP].map(a => `- '${a.name}'`).join('\n')}
+${fields[FIELD_APP].map(a => `- '${a.name}'`).join('\n')}
 
 Rules:
 - Return exactly one theme and one app.
@@ -146,25 +156,6 @@ Priority rules:
 Return ONLY valid JSON in the required format.`
 }
 
-function parseNumber(value, fieldName) {
-
-    if (typeof value === 'number') {
-        if (!Number.isInteger(value)) {
-            throw new Error(`Field "${fieldName}" must be integer`)
-        }
-        return value
-    }
-
-    if (typeof value === 'string') {
-        if (!/^\d+$/.test(value)) {
-            throw new Error(`Field "${fieldName}" must be numeric string`)
-        }
-        return Number(value)
-    }
-
-    throw new Error(`Field "${fieldName}" must be number`)
-}
-
 function parseAIAnswer(ctx, output) {
 
     const answer = JSON.parse(output)
@@ -176,62 +167,120 @@ function parseAIAnswer(ctx, output) {
 
     const themeValue = answer.theme
     if (!themeValue) throw new Error('Missed theme in response: ' + output)
-    const theme = fields[VAL_THEME].find(t => t.name.toLowerCase() === themeValue.toLowerCase())
-    if (!theme) throw new Error('Invalid response: ' + output)
+
+    const theme = fields[FIELD_THEME].find(
+        t => t.name.toLowerCase() === String(themeValue).toLowerCase()
+    )
+    if (!theme) throw new Error('Invalid theme in response: ' + output)
 
     const appValue = answer.app
     if (!appValue) throw new Error('Missed app in response: ' + output)
-    const app = fields[VAL_APP].find(a => a.name.toLowerCase() === appValue.toLowerCase())
-    if (!app) throw new Error('Invalid response:  ' + output)
 
-    if (!answer.description) {
-        throw new Error('Missed description in response:  ' + output)
+    const app = fields[FIELD_APP].find(
+        a => a.name.toLowerCase() === String(appValue).toLowerCase()
+    )
+    if (!app) throw new Error('Invalid app in response: ' + output)
+
+    if (typeof answer.description !== 'string' || !answer.description.trim()) {
+        throw new Error('Missed description in response: ' + output)
     }
 
-    return { 
-        theme: theme, 
-        app: app, 
-        confidence: Number(answer.confidence) || 0, 
-        description: answer.description
+    const confidence = Number(answer.confidence)
+    return {
+        theme,
+        app,
+        description: answer.description.trim(),
+        confidence: Number.isFinite(confidence) ? confidence : 0,
     }
 }
 
-const VAL_LAST_OUTPUT = 'last_output'
-const VAL_LAST_RESPONSE_ID = 'last_response_id'
 
-async function performAIRequest(ctx, message) {
-    let response = null
+// --- history ---
 
-    const previous_response_id = ctx.getValue(VAL_LAST_RESPONSE_ID)
-    if (previous_response_id) {
-         // Продолжение беседы
-        response = await client.responses.create({
-            model: GPT_MODEL,
-            input: message,
-            previous_response_id,
-        })
-    } else {
-         // Новая беседа
-        const fields = ctx.getValue(VAL_FIELDS)
-        const prompt = createPrompt(fields)
-        response = await client.responses.create({
-            model: GPT_MODEL,
-            instructions: prompt,
-            input: message
-        })
+function getHistory(ctx) {
+    const history = ctx.getValue(VAL_HISTORY)
+    return Array.isArray(history) ? history : []
+}
+
+function setHistory(ctx, history) {
+    ctx.setValue(VAL_HISTORY, history)
+}
+
+function clearHistory(ctx) {
+    setHistory(ctx, [])
+}
+
+function createUserMessage(text) {
+    return {
+        role: 'user',
+        content: [{ type: 'input_text', text }]
+    }
+}
+
+function createAssistantMessage(text) {
+    return {
+        role: 'assistant',
+        content: [{ type: 'output_text', text }]
+    }
+}
+
+function appendHistory(ctx, userText, assistantText, baseHistory = null) {
+    const history = baseHistory ?? getHistory(ctx)
+    setHistory(ctx, [
+        ...history,
+        createUserMessage(userText),
+        createAssistantMessage(assistantText),
+    ])
+}
+
+
+// --- ai request helpers ---
+
+async function callAI(ctx, message, historyOverride = null) {
+    const fields = ctx.getValue(VAL_FIELDS)
+    const instructions = createPrompt(fields)
+    const history = historyOverride ?? getHistory(ctx)
+
+    const response = await client.responses.create({
+        model: GPT_MODEL,
+        instructions,
+        input: [
+            ...history,
+            createUserMessage(message),
+        ],
+    })
+
+    const output = response.output_text
+    ctx.setValue(VAL_LAST_OUTPUT, output)
+
+    if (!output) {
+        throw new Error('Empty response from OpenAI')
     }
 
-    // Для продолжения беседы
-    ctx.setValue(VAL_LAST_RESPONSE_ID, response.id)
-    // Для аналитики
-    ctx.setValue(VAL_LAST_OUTPUT, response.output_text)
-
-    return response.output_text
+    return { output, history }
 }
+
+async function requestClassification(ctx, message, historyOverride = null) {
+    const { output, history } = await callAI(ctx, message, historyOverride)
+    const answer = parseAIAnswer(ctx, output)
+    appendHistory(ctx, message, output, history)
+    return answer
+}
+
+async function retryClassification(ctx, message) {
+    try {
+        return await requestClassification(ctx, message)
+    } catch (e) {
+        console.warn('requestClassification error:', e)
+        clearHistory(ctx)
+        return await requestClassification(ctx, message, [])
+    }
+}
+
+
+// --- confirm ---
 
 function sendConfirmRequest(req, ctx, answer) {
-
-    // Пригодится при получении ответов
     ctx.setValue(VAL_THEME, answer.theme.id)
     ctx.setValue(VAL_APP, answer.app.id)
 
@@ -255,57 +304,49 @@ function sendConfirmRequest(req, ctx, answer) {
 // --- onRequest ---
 
 export async function onRequest(req, ctx) {
-    console.log(`onRequest:1: start`)
+    console.log('onRequest:1: start')
+
     const message = req.getParam(REQ_MESSAGE)
     if (!message) throw new Error('Message parameter is required')
 
-    console.log(`onRequest:2: getFreescoutFields()`)
+    console.log('onRequest:2: getFreescoutFields()')
     const fields = await getFreescoutFields()
     ctx.setValue(VAL_FIELDS, fields)
 
-    let answer = null
-    try {
-        console.log(`onRequest:3: performAIRequest()`)
-        const output = await performAIRequest(ctx, message)
-        answer = parseAIAnswer(ctx, output)
-    } catch {
-        // Попробуем ещё раз
-        console.log(`onRequest:4: performAIRequest()`)
-        ctx.setValue(VAL_LAST_RESPONSE_ID, null)
-        const output = await performAIRequest(ctx, message)
-        answer = parseAIAnswer(ctx, output)
-    }
+    console.log('onRequest:3: requestClassification()')
+    const answer = await retryClassification(ctx, message)
 
-    console.log(`onRequest:5: sendConfirmRequest()`)
+    console.log('onRequest:4: sendConfirmRequest()')
     sendConfirmRequest(req, ctx, answer)
-    console.log(`onRequest:6: finish`)
+
+    console.log('onRequest:5: finish')
 }
 
 
 // --- onResponse ---
 
 export async function onResponse(responses, req, ctx) {
-    console.log(`onResponse:1: start`)
+    console.log('onResponse:1: start')
+
     const resultString = responses[0]?.result
     if (!resultString) throw new Error('No response received from confirmation script')
-    const result = JSON.parse(resultString)
 
+    const result = JSON.parse(resultString)
     const cnfAnswer = result[APR_RES_ANSWER]
+
     if (cnfAnswer === APR_ANSWER_ACCEPTED) {
-        // Получено согласие
-        console.log(`onResponse:2: close()`)
+        console.log('onResponse:2: close()')
         ctx.close({
             [RES_SUCCESS]: true,
             [RES_THEME_INDEX]: ctx.getValue(VAL_THEME),
             [RES_APP_INDEX]: ctx.getValue(VAL_APP),
         })
-    } 
+    }
     else if (cnfAnswer === APR_ANSWER_COMMENT) {
-        // Получен комментарий
-
         const comment = result[APR_RES_COMMENT]?.trim()
+
         if (!comment) {
-            console.log(`onResponse:3: close()`)
+            console.log('onResponse:3: close()')
             ctx.close({
                 [RES_SUCCESS]: false,
                 [RES_REASON]: 'Not confirmed.',
@@ -313,34 +354,31 @@ export async function onResponse(responses, req, ctx) {
             return
         }
 
-        let answer = null
+        console.log('onResponse:4: requestClassification()')
         try {
-            console.log(`onResponse:4: performAIRequest()`)
-            const message = prepareComment(comment)
-            const output = await performAIRequest(ctx, message)
-            answer = parseAIAnswer(ctx, output)
-        } catch {
-            // Попробуем ещё раз
-            console.log(`onResponse:5: performAIRequest()`)
-            ctx.setValue(VAL_LAST_RESPONSE_ID, null)
-            const message = `${req.getParam(REQ_MESSAGE)}\n\n${comment}`
-            const output = await performAIRequest(ctx, message)
-            answer = parseAIAnswer(ctx, output)
+            const answer = await requestClassification(ctx, prepareComment(comment))
+            console.log('onResponse:5: sendConfirmRequest()')
+            sendConfirmRequest(req, ctx, answer)
+        } catch (e) {
+            console.warn('requestClassification error:', e)
+            clearHistory(ctx)
+
+            const fallbackMessage = `${req.getParam(REQ_MESSAGE)}\n\nREVIEW COMMENT:\n${comment}`
+            const answer = await requestClassification(ctx, fallbackMessage, [])
+
+            console.log('onResponse:6: sendConfirmRequest()')
+            sendConfirmRequest(req, ctx, answer)
         }
-
-        console.log(`onResponse:6: sendConfirmRequest()`)
-        sendConfirmRequest(req, ctx, answer)
-    } 
+    }
     else if (cnfAnswer === APR_ANSWER_REVISE) {
-        // Получен запрос на доработку
+        console.log('onResponse:7: revise')
+        clearHistory(ctx)
 
-        ctx.setValue(VAL_LAST_RESPONSE_ID, null)
-        console.log(`onResponse:7: performAIRequest()`)
-        const output = await performAIRequest(ctx, req.getParam(REQ_MESSAGE))
-        const answer = parseAIAnswer(ctx, output)
-        
+        const message = req.getParam(REQ_MESSAGE)
+        const answer = await requestClassification(ctx, message, [])
+
         if (!answer.theme || !answer.app) {
-            console.log(`onResponse:8: close()`)
+            console.log('onResponse:8: close()')
             ctx.close({
                 [RES_SUCCESS]: false,
                 [RES_REASON]: 'Theme and applications are not defined, content: ' + ctx.getValue(VAL_LAST_OUTPUT)
@@ -348,12 +386,11 @@ export async function onResponse(responses, req, ctx) {
             return
         }
 
-        console.log(`onResponse:9: sendConfirmRequest()`)
+        console.log('onResponse:9: sendConfirmRequest()')
         sendConfirmRequest(req, ctx, answer)
     }
     else if (cnfAnswer === APR_ANSWER_REJECTED) {
-        // Получен отказ
-        console.log(`onResponse:10: close()`)
+        console.log('onResponse:10: close()')
         ctx.close({
             [RES_SUCCESS]: false,
             [RES_REASON]: 'Reject.',
@@ -362,5 +399,6 @@ export async function onResponse(responses, req, ctx) {
     else {
         throw new Error(`Unsupported answer: ${cnfAnswer}`)
     }
-    console.log(`onResponse:11: finish`)
+
+    console.log('onResponse:11: finish')
 }
